@@ -1,0 +1,16 @@
+<RCC>
+    <qresource prefix="/">
+        <file>icons/pause-svgrepo-com.svg</file>
+        <file>icons/play-pause-svgrepo-com.svg</file>
+        <file>icons/play-svgrepo-com.svg</file>
+        <file>icons/play-svgrepo-com (1).svg</file>
+        <file>icons/replay-svgrepo-com.svg</file>
+        <file>icons/stop-svgrepo-com.svg</file>
+        <file>icons/pause.svg</file>
+        <file>icons/play.svg</file>
+        <file>icons/playsingle.svg</file>
+        <file>icons/restartacq.svg</file>
+        <file>icons/startacq.svg</file>
+        <file>icons/stopacq.svg</file>
+    </qresource>
+</RCC>
