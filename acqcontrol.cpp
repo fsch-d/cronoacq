@@ -4,7 +4,7 @@
 #include <QRandomGenerator>
 #include <QtMath>
 #include <QCoreApplication>
-//#include "rootserver.h"
+#include "rootserver.h"
 
 
 
@@ -73,6 +73,7 @@ void acqcontrol::startgo4server()
     QObject::connect(this,&acqcontrol::destroyed, serverThread, &QThread::quit);
     QObject::connect(serverThread, &QThread::finished, server, &QObject::deleteLater);
     QObject::connect(this, &acqcontrol::startserver, server, &rootserver::listen);
+    QObject::connect(server, &rootserver::logmessage, this, &acqcontrol::logmessage);
 
 
     serverThread->start();
@@ -89,6 +90,7 @@ void acqcontrol::startgo4server()
 void acqcontrol::runloop()
 {
     m_isrunning=true;
+//    qInfo() << initpars.main.range_start;
     //int j=0;
     emit logmessage("ACQ loop runs!");
     if(!m_timercreated_flag) createtimers();

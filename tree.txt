@@ -1,0 +1,19 @@
+main
+card 0
+    A
+    B
+    C
+    D
+    TDC
+card 1
+    A
+    B
+    C
+    D
+    TDC
+card 2
+    A
+    B
+    C
+    D
+    TDC

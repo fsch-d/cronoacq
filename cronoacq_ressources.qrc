@@ -12,5 +12,13 @@
         <file>icons/restartacq.svg</file>
         <file>icons/startacq.svg</file>
         <file>icons/stopacq.svg</file>
+        <file>icons/logo.svg</file>
+        <file>icons/repeatonce.svg</file>
+        <file>icons/pause_reg.svg</file>
+        <file>icons/play_reg.svg</file>
+        <file>icons/record_stop_reg.svg</file>
+        <file>icons/conffile.svg</file>
+        <file>icons/fit_reg.svg</file>
+        <file>icons/record_reg.svg</file>
     </qresource>
 </RCC>

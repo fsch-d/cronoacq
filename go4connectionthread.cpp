@@ -15,7 +15,7 @@ void go4connectionThread::senddata(bufferEvnt hdr, QVector<int> channels, QVecto
 {
     if(m_pipebroken) return;
     int Flag_end = 0;
-    int connectflag = socket->SendRaw(&Flag_end, 4);
+    int connectflag = 1;//socket->SendRaw(&Flag_end, 4);
     if(connectflag<0){
         qInfo() << this << "socket broken";
         m_pipebroken=true;
@@ -34,12 +34,12 @@ void go4connectionThread::senddata(bufferEvnt hdr, QVector<int> channels, QVecto
         go4event[i].time=times[i];
     }
 
-    socket->SendRaw(&hdr,sizeof(bufferEvnt));
-    socket->SendRaw(&go4event, sizeof(bufferEvnt)*hdr.channel);
+//    socket->SendRaw(&hdr,sizeof(bufferEvnt));
+//    socket->SendRaw(&go4event, sizeof(bufferEvnt)*hdr.channel);
 
 }
-
+/*
 void go4connectionThread::setSocket(TSocket *newS)
 {
     socket = newS;
-}
+}*/

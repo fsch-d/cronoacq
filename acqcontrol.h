@@ -31,6 +31,8 @@ public slots:
     void restart();
     void quit();
     void set_nofsamples(int n){m_nofsamples=n;}
+    void set_initpars(init_pars ip){initpars=ip;}
+    void set_statuspars(status_pars sp){statuspars=sp;}
 
 private slots:
     void PlotTrigger();
@@ -45,6 +47,9 @@ private:
     bool m_go4serverstarted_flag;
     int m_count;
     int m_nofsamples;
+    init_pars initpars;
+    status_pars statuspars;
+
 
     int maxfps=60;
 

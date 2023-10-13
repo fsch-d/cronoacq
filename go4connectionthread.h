@@ -3,7 +3,7 @@
 
 #include "cronotypes.h"
 #include <QObject>
-#include <TSocket.h>
+//#include "TSocket.h"
 
 class go4connectionThread : public QObject
 {
@@ -11,7 +11,7 @@ class go4connectionThread : public QObject
 public:
     explicit go4connectionThread(QObject *parent = nullptr);
 
-    void setSocket(TSocket *newS);
+//    void setSocket(TSocket *newS);
 
 signals:
     void killme();
@@ -20,7 +20,7 @@ public slots:
     void senddata(bufferEvnt hdr, QVector<int> channels, QVector<quint64> times);
 
 private:
-    TSocket *socket;
+//    TSocket *socket;
     bool m_pipebroken;
 
 };

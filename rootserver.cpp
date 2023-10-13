@@ -1,9 +1,9 @@
 #include "rootserver.h"
 
 //root classes
-#include "Riostream.h"
-#include <TServerSocket.h>
-#include <TSocket.h>
+/*#include "Riostream.h"
+#include "TServerSocket.h"
+#include "TSocket.h"*/
 #include <QThread>
 #include <QDebug>
 #include <QCoreApplication>
@@ -29,9 +29,9 @@ void rootserver::setListen(bool newListen)
 
 void rootserver::listen(QObject *requestor)
 {
-TServerSocket *ss = new TServerSocket(6004, kTRUE);
+//TServerSocket *ss = new TServerSocket(6004, kTRUE);
 
-    ss->SetOption(kNoBlock, 1);
+//    ss->SetOption(kNoBlock, 1);
 
 QObject::connect(this, &rootserver::updatenofclients,(acqcontrol*) requestor,&acqcontrol::nofclients);
 
@@ -39,11 +39,11 @@ QObject::connect(this, &rootserver::updatenofclients,(acqcontrol*) requestor,&ac
     {
         QCoreApplication::processEvents();
         QThread::sleep(1);
-        TSocket* s0;
+  /*      TSocket* s0;
 
         s0 = ss->Accept();
         if(reinterpret_cast<intptr_t>(s0)!=-1){
-            qInfo() << "conection established" << s0;
+            //qInfo() << "client " << ss->GetUrl() << "connected" << s0;
             go4connectionThread *go4connection = new go4connectionThread();
             QThread *thread = new QThread;
 
@@ -61,15 +61,16 @@ QObject::connect(this, &rootserver::updatenofclients,(acqcontrol*) requestor,&ac
             thread->start();
             nofclients++;
             emit updatenofclients(nofclients);
-        }
+            emit logmessage("client connected");
+*/        }
         //else qInfo() << "no conection";
 
 
 
-    }
-    ss->Close();
+   // }
+  //  ss->Close();
 
-    delete ss;
+  //  delete ss;
 
 }
 
@@ -77,4 +78,5 @@ void rootserver::connectionlost()
 {
     nofclients--;
     emit updatenofclients(nofclients);
+    emit logmessage("client disconnected");
 }

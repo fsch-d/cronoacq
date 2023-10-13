@@ -3,15 +3,16 @@
 #include <ctime>
 #include <QDebug>
 #include <QThread>
+#include <QMetaType>
+#include <QDataStream>
 
-#include <QDate>
-#include <QLocale>
-#include <QLineEdit>
-#include "src/qtpropertymanager.h"
-#include "src/qtvariantproperty.h"
-#include "src/qttreepropertybrowser.h"
+#include <QFile>
+#include "qtpropertymanager.h"
+#include "qtvariantproperty.h"
+#include "qttreepropertybrowser.h"
 
 #include "qcustomplot.h"
+#include "treemodel.h"
 
 
 cronoacqDlg::cronoacqDlg(QWidget *parent)
@@ -20,57 +21,48 @@ cronoacqDlg::cronoacqDlg(QWidget *parent)
 {
     ui->setupUi(this);
 
+    qRegisterMetaType<init_pars>();
 
 
+    //Load settings from QSettings
     QSettings settings("Fischerlab", "cronoACQ");
- //   restoreGeometry(settings.value("geometry").toByteArray());
     restoreState(settings.value("windowState").toByteArray());
-
-
-    setCentralWidget(ui->TracedockWidget);
-//    splitDockWidget(ui->TracedockWidget,ui->propertydockWidget, Qt::Horizontal);
-
+    initpars = settings.value("initpars").value<init_pars>();
 
 
 
     //some ui stuff
-
-
-
+    setCentralWidget(ui->TracedockWidget);
     ui->actionpause_sampling->setEnabled(false);
     ui->actionrestart_acquisition->setEnabled(false);
     ui->actionstop_acquisition->setEnabled(false);
-//    ui->actionstart_acquistion->setEnabled(true);
-
-
+    ui->actionstop_recording->setEnabled(false);
     ui->lcdRate->setAutoFillBackground(true);
-
     ui->statusbar->addWidget(ui->lcdRate);
     ui->statusbar->addWidget(ui->nofclients);
+    if(!initpars.main.advconf) ui->actionadv_configuration->setEnabled(false);
 
 
     auto palette = ui->lcdRate->palette();
     palette.setColor(palette.Window, Qt::red);
     palette.setColor(palette.WindowText, Qt::black);
     ui->lcdRate->setPalette(palette);
-
     ui->lcdRate->setSegmentStyle(QLCDNumber::Flat );
 
     ui->customPlot->setInteractions(QCP::iRangeDrag | QCP::iRangeZoom);
     ui->customPlot->axisRect()->setRangeZoomAxes(nullptr,ui->customPlot->yAxis);
 
 
-
+    //getting propertygrid
     variantManager = new QtVariantPropertyManager();
     variantFactory = new QtVariantEditorFactory();
     initpropertygrid();
 
-    QObject::connect(variantManager, &QtVariantPropertyManager::valueChanged, this, &cronoacqDlg::propertyChanged);
-
+    //QObject::connect(ui->variantEditor, &QTreeWidget::itemActivated, this, &cronoacqDlg::on_propertyActivated);
 
 
     initplot();
- //   inittree();
+    inittree();
     nofclients(0);
 
 
@@ -78,6 +70,7 @@ cronoacqDlg::cronoacqDlg(QWidget *parent)
     QThread::currentThread()->setObjectName("cronoacqdlg thread");
 
     acqCtrl = new acqcontrol();
+    acqCtrl->set_initpars(initpars);
     acqCtrlThread = new QThread();
 
     acqCtrl->moveToThread(acqCtrlThread);
@@ -87,7 +80,9 @@ cronoacqDlg::cronoacqDlg(QWidget *parent)
 
     connect(acqCtrlThread, &QThread::finished, acqCtrl, &QObject::deleteLater);
 
-    //Connect ui to readout thread
+    //Connect signals and slots, e.g., ui to readout thread
+    QObject::connect(this,&cronoacqDlg::initparsChanged,acqCtrl,&acqcontrol::set_initpars);
+    QObject::connect(this,&cronoacqDlg::statusChanged,acqCtrl,&acqcontrol::set_statuspars);
     QObject::connect(acqCtrl,&acqcontrol::logmessage,this,&cronoacqDlg::logmessage);
     QObject::connect(ui->actionstart_acquistion,&QAction::triggered,acqCtrl,&acqcontrol::runloop);
     QObject::connect(ui->actionstop_acquisition,&QAction::triggered,acqCtrl,&acqcontrol::quit,Qt::DirectConnection);
@@ -97,8 +92,8 @@ cronoacqDlg::cronoacqDlg(QWidget *parent)
     QObject::connect(acqCtrl,&acqcontrol::rate,this,&cronoacqDlg::showrate);
     QObject::connect(acqCtrl,&acqcontrol::nofclients,this,&cronoacqDlg::nofclients);
 
-    qInfo() << this << "All starts here!";
 
+    qInfo() << this << "All starts here!";
 
     //
 
@@ -109,12 +104,20 @@ cronoacqDlg::cronoacqDlg(QWidget *parent)
 cronoacqDlg::~cronoacqDlg()
 {
 
-    if(0)
+    QSettings settings("Fischerlab", "cronoACQ");
+    QVariant v = QVariant::fromValue(initpars);
+//    qInfo() << v;
+
+    settings.setValue("initpars",v);
+
+    if(m_initialize_settings)
     {
-        QSettings settings("Fischerlab", "cronoACQ");
         settings.setValue("geometry", saveGeometry());
         settings.setValue("windowState", saveState());
     }
+
+
+
     delete variantManager;
     delete variantFactory;
 
@@ -147,9 +150,75 @@ void cronoacqDlg::nofclients(int n)
     ui->nofclients->setText(noc);
 }
 
-void cronoacqDlg::propertyChanged(QtProperty *property, const QVariant &val)
+void cronoacqDlg::on_propertyChanged(QtProperty *property, const QVariant &val)
 {
-    qInfo() << "item " << property->propertyName() << "changed to" << val;
+    //main properties
+    if(property->propertyName()==QString("source card")) initpars.main.sourcecard=val.toInt();
+    if(property->propertyName()==QString("source channel")) initpars.main.sourcechan=val.toInt();
+    if(property->propertyName()==QString("range start")) initpars.main.range_start=val.toInt();
+    if(property->propertyName()==QString("range stop")) initpars.main.range_stop=val.toInt();
+
+    if(property->propertyName()==QString("advanced configuration"))
+    {
+        initpars.main.advconf=val.toBool();
+        if(val.toBool())
+        {
+            property->subProperties().constFirst()->setEnabled(true);
+            ui->actionadv_configuration->setEnabled(true);
+        }
+        else
+        {
+            property->subProperties().constFirst()->setEnabled(false);
+            ui->actionadv_configuration->setEnabled(false);
+        }
+    }
+    if(property->propertyName()==QString("configuration file")) initpars.main.advfilename=val.toString();
+
+
+    //card properties
+    if(!(statuspars.active_card < 0 || statuspars.active_card >= NR_CARDS))
+    {
+        if(property->propertyName()==QString("precursor")) initpars.card[statuspars.active_card].cardPars.precursor=val.toInt();
+        if(property->propertyName()==QString("length")) initpars.card[statuspars.active_card].cardPars.length=val.toInt();
+        if(property->propertyName()==QString("retrigger")) initpars.card[statuspars.active_card].cardPars.retrigger=val.toBool();
+
+        //channel properties
+        if(!(statuspars.active_chan < 0 || statuspars.active_chan >= 5))
+        {
+            if(property->propertyName()==QString("edge")) initpars.card[statuspars.active_card].chan[statuspars.active_chan].edge=val.toBool();
+            if(property->propertyName()==QString("rising")) initpars.card[statuspars.active_card].chan[statuspars.active_chan].rising=val.toBool();
+            if(property->propertyName()==QString("threshhold")) initpars.card[statuspars.active_card].chan[statuspars.active_chan].thresh=val.toInt();
+        }
+    }
+
+    emit initparsChanged(initpars);
+
+    //qInfo() << "item " << property->propertyName() << "changed to" << val;
+}
+
+void cronoacqDlg::on_activeTreeItemChanged(const QModelIndex &index)
+{
+    statuspars.active_chan=-1;
+    statuspars.active_card=-1;
+    if(index.data(Qt::DisplayRole).toString()==QString("card 0")) statuspars.active_card=0;
+    else if(index.data(Qt::DisplayRole).toString()==QString("card 1")) statuspars.active_card=1;
+    else if(index.data(Qt::DisplayRole).toString()==QString("card 2")) statuspars.active_card=2;
+    else
+    {
+        if(index.parent().data(Qt::DisplayRole).toString()==QString("card 0")) statuspars.active_card=0;
+        else if(index.parent().data(Qt::DisplayRole).toString()==QString("card 1")) statuspars.active_card=1;
+        else if(index.parent().data(Qt::DisplayRole).toString()==QString("card 2")) statuspars.active_card=2;
+        if(index.data(Qt::DisplayRole).toString()==QString("A")) statuspars.active_chan=0;
+        else if(index.data(Qt::DisplayRole).toString()==QString("B")) statuspars.active_chan=1;
+        else if(index.data(Qt::DisplayRole).toString()==QString("C")) statuspars.active_chan=2;
+        else if(index.data(Qt::DisplayRole).toString()==QString("D")) statuspars.active_chan=3;
+        else if(index.data(Qt::DisplayRole).toString()==QString("TDC")) statuspars.active_chan=4;
+    }
+    initpropertygrid();
+
+    //qInfo() << "item " << index.data(Qt::DisplayRole) << "   " << index.parent().data(Qt::DisplayRole) << "clicked";
+
+    emit statusChanged(statuspars);
 }
 
 
@@ -187,400 +256,155 @@ void cronoacqDlg::initplot()
     ui->customPlot->replot();
 }
 
-/*void cronoacqDlg::inittree()
+void cronoacqDlg::inittree()
 {
-    ui->treeWidget->setColumnCount(1);
-    ui->treeWidget->setHeaderLabel("controls");
-    QTreeWidgetItem *main = new QTreeWidgetItem(ui->treeWidget, QStringList(QString("main")));
-    QTreeWidgetItem *card0 = new QTreeWidgetItem(ui->treeWidget, QStringList(QString("card 0")));
-    QTreeWidgetItem *card1 = new QTreeWidgetItem(ui->treeWidget, QStringList(QString("card 1")));
-    QTreeWidgetItem *card2 = new QTreeWidgetItem(ui->treeWidget, QStringList(QString("card 2")));
+    const QStringList headers({tr("Objects")});
 
-    QList<QTreeWidgetItem *> items;
-    items.append(main);
-    items.append(card0);
-    items.append(card1);
-    items.append(card2);
 
-    QTreeWidgetItem *channel[3][5];
-    QList<QTreeWidgetItem *> channels[3];
-    for(int i=0; i<3; i++)
+    QByteArray lines;
+    if(m_initialize_settings){//set 1 if tree.txt was changed
+        QFile file("../cronoacq/tree.txt");
+        file.open(QIODevice::ReadOnly);
+        lines =file.readAll();
+        file.close();
+        QSettings settings("Fischerlab", "cronoACQ");
+        QVariant v;
+        v=lines;
+        settings.setValue("treestructure", v);
+
+    }
+    else
     {
-        for(int j=0; j<5; j++) channel[i][j]= new QTreeWidgetItem();
-        channel[i][0]->setText(0,"channel A");
-        channel[i][1]->setText(0,"channel B");
-        channel[i][2]->setText(0,"channel C");
-        channel[i][3]->setText(0,"channel D");
-        channel[i][4]->setText(0,"TDC");
-        for(int j=0; j<5; j++) channels[i].append(channel[i][j]);
+        QSettings settings("Fischerlab", "cronoACQ");
+        lines=settings.value("treestructure").toByteArray();
     }
 
-    card0->addChildren(channels[0]);
-    card1->addChildren(channels[1]);
-    card2->addChildren(channels[2]);
+    TreeModel *model = new TreeModel(headers, lines, this);
 
-    ui->treeWidget->addTopLevelItems(items);
-}*/
+    ui->treeView->setModel(model);
+    for (int column = 0; column < model->columnCount(); ++column)
+        ui->treeView->resizeColumnToContents(column);
+
+    QObject::connect(ui->treeView, &QAbstractItemView::clicked, this, &cronoacqDlg::on_activeTreeItemChanged);
+
+
+}
+
 
 
 void cronoacqDlg::initpropertygrid()
 {
-    int i = 0;
+    //int i = 0;
+
+    QObject::disconnect(variantManager, &QtVariantPropertyManager::valueChanged, this, &cronoacqDlg::on_propertyChanged);
+
+
+    ui->variantEditor->clear();
     ui->variantEditor->setResizeMode(QtTreePropertyBrowser::Interactive);
 
-    QtProperty *mainItems = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("main settings"));
-
-    QtVariantProperty *item = variantManager->addProperty(QtVariantPropertyManager::enumTypeId(), QLatin1String("source card"));
-    QStringList enumNames;
-    enumNames << "card 0" << "card 1" << "card 2";
-    item->setAttribute(QLatin1String("enumNames"), enumNames);
-    item->setValue(0);
-    mainItems->addSubProperty(item);
+    int n=-1;
+    if(statuspars.active_card==-1 && statuspars.active_chan==-1) n=0;
+    if(statuspars.active_card>-1 && statuspars.active_card<NR_CARDS && statuspars.active_chan==-1) n=1;
+    if(statuspars.active_card>-1 && statuspars.active_card<NR_CARDS && statuspars.active_chan>-1 && statuspars.active_chan<5) n=2;
 
 
-    item = variantManager->addProperty(QtVariantPropertyManager::enumTypeId(), QLatin1String("source channel"));
-    enumNames.clear();
-    enumNames << "A" << "B" << "C" << "D" << "TDC";
-    item->setAttribute(QLatin1String("enumNames"), enumNames);
-    item->setValue(0);
-    mainItems->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Int, QLatin1String("range start"));
-    item->setValue(-50000000);
-    item->setAttribute(QLatin1String("minimum"),-100000000);
-    item->setAttribute(QLatin1String("maximum"), 100000000);
-    item->setAttribute(QLatin1String("singleStep"), 1);
-    item->setEnabled(true);
-    mainItems->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Int, QLatin1String("range stop"));
-    item->setValue(1000000);
-    item->setAttribute(QLatin1String("minimum"),-100000000);
-    item->setAttribute(QLatin1String("maximum"), 100000000);
-    item->setAttribute(QLatin1String("singleStep"), 1);
-    item->setEnabled(true);
-    mainItems->addSubProperty(item);
-
-    //item = variantManager->addProperty(QtVariantPropertyManager::QtVariantPropertyManager::groupTypeId(), QLatin1String("advanced configuration"));
-
- //   QtVariantProperty *subItem = variantManager->addProperty(QVariant::Bool, QLatin1String("enabled"));
-    item = variantManager->addProperty(QVariant::Bool, QLatin1String("advanced configuration"));
-    item->setValue(true);
-
-    QtVariantProperty *subItem = variantManager->addProperty(QVariant::String, QLatin1String("configuration file"));
-    item->addSubProperty(subItem);
-    mainItems->addSubProperty(item);
-
-
-    QtProperty *card[3];
-    card[0] = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("card 0"));
-    card[1] = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("card 1"));
-    card[2] = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("card 2"));
-
-
-    for(int i=0; i<3; i++)
+    switch(n){
+    case 0:
     {
-        QtVariantProperty *channel[5];
-
-        channel[0] = variantManager->addProperty(QVariant::String, QLatin1String("A"));
-        channel[1] = variantManager->addProperty(QVariant::String, QLatin1String("B"));
-        channel[2] = variantManager->addProperty(QVariant::String, QLatin1String("C"));
-        channel[3] = variantManager->addProperty(QVariant::String, QLatin1String("D"));
-        channel[4] = variantManager->addProperty(QVariant::String, QLatin1String("TDC"));
-
-        //item->setValue(1000000);
-        for(int j=0; j<5; j++){
-
-            subItem = variantManager->addProperty(QVariant::Bool, QLatin1String("edge"));
-            subItem->setValue(true);
-            channel[j]->addSubProperty(subItem);
-            subItem = variantManager->addProperty(QVariant::Bool, QLatin1String("rising"));
-            subItem->setValue(false);
-            channel[j]->addSubProperty(subItem);
-            subItem = variantManager->addProperty(QVariant::Int, QLatin1String("threshhold"));
-            subItem->setValue(-10);
-            channel[j]->addSubProperty(subItem);
-
-            card[i]->addSubProperty(channel[j]);
-        }
+        QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("main settings"));
+        QtVariantProperty *item = variantManager->addProperty(QtVariantPropertyManager::enumTypeId(), QLatin1String("source card"));
+        QStringList enumNames;
+        enumNames << "card 0" << "card 1" << "card 2";
+        item->setAttribute(QLatin1String("enumNames"), enumNames);
+        item->setValue(initpars.main.sourcecard);
+        topItem->addSubProperty(item);
 
 
+        item = variantManager->addProperty(QtVariantPropertyManager::enumTypeId(), QLatin1String("source channel"));
+        enumNames.clear();
+        enumNames << "A" << "B" << "C" << "D" << "TDC";
+        item->setAttribute(QLatin1String("enumNames"), enumNames);
+        item->setValue(initpars.main.sourcechan);
+        topItem->addSubProperty(item);
+
+        item = variantManager->addProperty(QVariant::Int, QLatin1String("range start"));
+        item->setValue(initpars.main.range_start);
+        item->setAttribute(QLatin1String("minimum"),-100000000);
+        item->setAttribute(QLatin1String("maximum"), 100000000);
+        item->setAttribute(QLatin1String("singleStep"), 1);
+        item->setEnabled(true);
+        topItem->addSubProperty(item);
+
+        item = variantManager->addProperty(QVariant::Int, QLatin1String("range stop"));
+        item->setValue(initpars.main.range_stop);
+        item->setAttribute(QLatin1String("minimum"),-100000000);
+        item->setAttribute(QLatin1String("maximum"), 100000000);
+        item->setAttribute(QLatin1String("singleStep"), 1);
+        item->setEnabled(true);
+        topItem->addSubProperty(item);
+        item = variantManager->addProperty(QVariant::Bool, QLatin1String("advanced configuration"));
+        item->setValue(initpars.main.advconf);
+
+        QtVariantProperty *subItem = variantManager->addProperty(QVariant::String, QLatin1String("configuration file"));
+        subItem->setValue(initpars.main.advfilename);
+        if(!initpars.main.advconf) subItem->setEnabled(false);
+        item->addSubProperty(subItem);
+        topItem->addSubProperty(item);
+
+        ui->variantEditor->setFactoryForManager(variantManager, variantFactory);
+        ui->variantEditor->addProperty(topItem);
+
+        QObject::connect(variantManager, &QtVariantPropertyManager::valueChanged, this, &cronoacqDlg::on_propertyChanged);
+
+        break;
+    }
+    case 1:
+    {
+        QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("card settings"));
+        QtVariantProperty *item = variantManager->addProperty(QVariant::Int, QLatin1String("precursor"));
+        item->setValue(initpars.card[statuspars.active_card].cardPars.precursor);
+        topItem->addSubProperty(item);
+        item = variantManager->addProperty(QVariant::Int, QLatin1String("length"));
+        item->setValue(initpars.card[statuspars.active_card].cardPars.length);
+        topItem->addSubProperty(item);
+        item = variantManager->addProperty(QVariant::Bool, QLatin1String("retrigger"));
+        item->setValue(initpars.card[statuspars.active_card].cardPars.retrigger);
+        topItem->addSubProperty(item);
+
+        ui->variantEditor->setFactoryForManager(variantManager, variantFactory);
+        ui->variantEditor->addProperty(topItem);
+
+        QObject::connect(variantManager, &QtVariantPropertyManager::valueChanged, this, &cronoacqDlg::on_propertyChanged);
+
+        break;
+    }
+    case 2:
+    {
+        QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("channel settings"));
+        QtVariantProperty *item = variantManager->addProperty(QVariant::Bool, QLatin1String("edge"));
+        item->setValue(initpars.card[statuspars.active_card].chan[statuspars.active_chan].edge);
+        topItem->addSubProperty(item);
+        item = variantManager->addProperty(QVariant::Bool, QLatin1String("rising"));
+        item->setValue(initpars.card[statuspars.active_card].chan[statuspars.active_chan].rising);
+        topItem->addSubProperty(item);
+        item = variantManager->addProperty(QVariant::Int, QLatin1String("threshhold"));
+        item->setValue(initpars.card[statuspars.active_card].chan[statuspars.active_chan].thresh);
+        topItem->addSubProperty(item);
+
+        ui->variantEditor->setFactoryForManager(variantManager, variantFactory);
+        ui->variantEditor->addProperty(topItem);
+
+        QObject::connect(variantManager, &QtVariantPropertyManager::valueChanged, this, &cronoacqDlg::on_propertyChanged);
+
+        break;
     }
 
-/*
+    default:
+        ;
+    }
 
-    QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("the other stuff"));
-
-
-    item = variantManager->addProperty(QVariant::Int, QString::number(i++) + QLatin1String(" Int Property"));
-    item->setValue(20);
-    item->setAttribute(QLatin1String("minimum"), 0);
-    item->setAttribute(QLatin1String("maximum"), 100);
-    item->setAttribute(QLatin1String("singleStep"), 10);
-    item->setEnabled(true);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Int, QString::number(i++) + QLatin1String(" Int Property (ReadOnly)"));
-    item->setValue(20);
-    item->setAttribute(QLatin1String("minimum"), 0);
-    item->setAttribute(QLatin1String("maximum"), 100);
-    item->setAttribute(QLatin1String("singleStep"), 10);
-    item->setAttribute(QLatin1String("readOnly"), true);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Double, QString::number(i++) + QLatin1String(" Double Property"));
-    item->setValue(1.2345);
-    item->setAttribute(QLatin1String("singleStep"), 0.1);
-    item->setAttribute(QLatin1String("decimals"), 3);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Double, QString::number(i++) + QLatin1String(" Double Property (ReadOnly)"));
-    item->setValue(1.23456);
-    item->setAttribute(QLatin1String("singleStep"), 0.1);
-    item->setAttribute(QLatin1String("decimals"), 5);
-    item->setAttribute(QLatin1String("readOnly"), true);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::String, QString::number(i++) + QLatin1String(" String Property"));
-    item->setValue("Value");
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::String, QString::number(i++) + QLatin1String(" String Property (Password)"));
-    item->setAttribute(QLatin1String("echoMode"), QLineEdit::Password);
-    item->setValue("Password");
-    topItem->addSubProperty(item);
-
-    // Readonly String Property
-    item = variantManager->addProperty(QVariant::String, QString::number(i++) + QLatin1String(" String Property (ReadOnly)"));
-    item->setAttribute(QLatin1String("readOnly"), true);
-    item->setValue("readonly text");
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Date, QString::number(i++) + QLatin1String(" Date Property"));
-    item->setValue(QDate::currentDate().addDays(2));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Time, QString::number(i++) + QLatin1String(" Time Property"));
-    item->setValue(QTime::currentTime());
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::DateTime, QString::number(i++) + QLatin1String(" DateTime Property"));
-    item->setValue(QDateTime::currentDateTime());
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::KeySequence, QString::number(i++) + QLatin1String(" KeySequence Property"));
-    item->setValue(QKeySequence(Qt::ControlModifier | Qt::Key_Q));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Char, QString::number(i++) + QLatin1String(" Char Property"));
-    item->setValue(QChar(386));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Locale, QString::number(i++) + QLatin1String(" Locale Property"));
-    item->setValue(QLocale(QLocale::Polish, QLocale::Poland));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Point, QString::number(i++) + QLatin1String(" Point Property"));
-    item->setValue(QPoint(10, 10));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::PointF, QString::number(i++) + QLatin1String(" PointF Property"));
-    item->setValue(QPointF(1.2345, -1.23451));
-    item->setAttribute(QLatin1String("decimals"), 3);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Size, QString::number(i++) + QLatin1String(" Size Property"));
-    item->setValue(QSize(20, 20));
-    item->setAttribute(QLatin1String("minimum"), QSize(10, 10));
-    item->setAttribute(QLatin1String("maximum"), QSize(30, 30));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::SizeF, QString::number(i++) + QLatin1String(" SizeF Property"));
-    item->setValue(QSizeF(1.2345, 1.2345));
-    item->setAttribute(QLatin1String("decimals"), 3);
-    item->setAttribute(QLatin1String("minimum"), QSizeF(0.12, 0.34));
-    item->setAttribute(QLatin1String("maximum"), QSizeF(20.56, 20.78));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Rect, QString::number(i++) + QLatin1String(" Rect Property"));
-    item->setValue(QRect(10, 10, 20, 20));
-    topItem->addSubProperty(item);
-    item->setAttribute(QLatin1String("constraint"), QRect(0, 0, 50, 50));
-
-    item = variantManager->addProperty(QVariant::RectF, QString::number(i++) + QLatin1String(" RectF Property"));
-    item->setValue(QRectF(1.2345, 1.2345, 1.2345, 1.2345));
-    topItem->addSubProperty(item);
-    item->setAttribute(QLatin1String("constraint"), QRectF(0, 0, 50, 50));
-    item->setAttribute(QLatin1String("decimals"), 3);
-
-/*    item = variantManager->addProperty(QtVariantPropertyManager::enumTypeId(),
-                                       QString::number(i++) + QLatin1String(" Enum Property"));
-    QStringList enumNames;
-    enumNames << "Enum0" << "Enum1" << "Enum2";
-    item->setAttribute(QLatin1String("enumNames"), enumNames);
-    item->setValue(1);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QtVariantPropertyManager::flagTypeId(),
-                                       QString::number(i++) + QLatin1String(" Flag Property"));
-    QStringList flagNames;
-    flagNames << "Flag0" << "Flag1" << "Flag2";
-    item->setAttribute(QLatin1String("flagNames"), flagNames);
-    item->setValue(5);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::SizePolicy, QString::number(i++) + QLatin1String(" SizePolicy Property"));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Font, QString::number(i++) + QLatin1String(" Font Property"));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Cursor, QString::number(i++) + QLatin1String(" Cursor Property"));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Color, QString::number(i++) + QLatin1String(" Color Property"));
-    topItem->addSubProperty(item);
-
-/*    QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(),
-                                                      QString::number(i++) + QLatin1String(" Group Property"));
-
-    QtVariantProperty *item = variantManager->addProperty(QVariant::Bool, QString::number(i++) + QLatin1String(" Bool Property"));
-    item->setValue(true);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Int, QString::number(i++) + QLatin1String(" Int Property"));
-    item->setValue(20);
-    item->setAttribute(QLatin1String("minimum"), 0);
-    item->setAttribute(QLatin1String("maximum"), 100);
-    item->setAttribute(QLatin1String("singleStep"), 10);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Int, QString::number(i++) + QLatin1String(" Int Property (ReadOnly)"));
-    item->setValue(20);
-    item->setAttribute(QLatin1String("minimum"), 0);
-    item->setAttribute(QLatin1String("maximum"), 100);
-    item->setAttribute(QLatin1String("singleStep"), 10);
-    item->setAttribute(QLatin1String("readOnly"), true);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Double, QString::number(i++) + QLatin1String(" Double Property"));
-    item->setValue(1.2345);
-    item->setAttribute(QLatin1String("singleStep"), 0.1);
-    item->setAttribute(QLatin1String("decimals"), 3);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Double, QString::number(i++) + QLatin1String(" Double Property (ReadOnly)"));
-    item->setValue(1.23456);
-    item->setAttribute(QLatin1String("singleStep"), 0.1);
-    item->setAttribute(QLatin1String("decimals"), 5);
-    item->setAttribute(QLatin1String("readOnly"), true);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::String, QString::number(i++) + QLatin1String(" String Property"));
-    item->setValue("Value");
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::String, QString::number(i++) + QLatin1String(" String Property (Password)"));
-    item->setAttribute(QLatin1String("echoMode"), QLineEdit::Password);
-    item->setValue("Password");
-    topItem->addSubProperty(item);
-
-    // Readonly String Property
-    item = variantManager->addProperty(QVariant::String, QString::number(i++) + QLatin1String(" String Property (ReadOnly)"));
-    item->setAttribute(QLatin1String("readOnly"), true);
-    item->setValue("readonly text");
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Date, QString::number(i++) + QLatin1String(" Date Property"));
-    item->setValue(QDate::currentDate().addDays(2));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Time, QString::number(i++) + QLatin1String(" Time Property"));
-    item->setValue(QTime::currentTime());
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::DateTime, QString::number(i++) + QLatin1String(" DateTime Property"));
-    item->setValue(QDateTime::currentDateTime());
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::KeySequence, QString::number(i++) + QLatin1String(" KeySequence Property"));
-    item->setValue(QKeySequence(Qt::ControlModifier | Qt::Key_Q));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Char, QString::number(i++) + QLatin1String(" Char Property"));
-    item->setValue(QChar(386));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Locale, QString::number(i++) + QLatin1String(" Locale Property"));
-    item->setValue(QLocale(QLocale::Polish, QLocale::Poland));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Point, QString::number(i++) + QLatin1String(" Point Property"));
-    item->setValue(QPoint(10, 10));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::PointF, QString::number(i++) + QLatin1String(" PointF Property"));
-    item->setValue(QPointF(1.2345, -1.23451));
-    item->setAttribute(QLatin1String("decimals"), 3);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Size, QString::number(i++) + QLatin1String(" Size Property"));
-    item->setValue(QSize(20, 20));
-    item->setAttribute(QLatin1String("minimum"), QSize(10, 10));
-    item->setAttribute(QLatin1String("maximum"), QSize(30, 30));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::SizeF, QString::number(i++) + QLatin1String(" SizeF Property"));
-    item->setValue(QSizeF(1.2345, 1.2345));
-    item->setAttribute(QLatin1String("decimals"), 3);
-    item->setAttribute(QLatin1String("minimum"), QSizeF(0.12, 0.34));
-    item->setAttribute(QLatin1String("maximum"), QSizeF(20.56, 20.78));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Rect, QString::number(i++) + QLatin1String(" Rect Property"));
-    item->setValue(QRect(10, 10, 20, 20));
-    topItem->addSubProperty(item);
-    item->setAttribute(QLatin1String("constraint"), QRect(0, 0, 50, 50));
-
-    item = variantManager->addProperty(QVariant::RectF, QString::number(i++) + QLatin1String(" RectF Property"));
-    item->setValue(QRectF(1.2345, 1.2345, 1.2345, 1.2345));
-    topItem->addSubProperty(item);
-    item->setAttribute(QLatin1String("constraint"), QRectF(0, 0, 50, 50));
-    item->setAttribute(QLatin1String("decimals"), 3);
-
-    item = variantManager->addProperty(QtVariantPropertyManager::enumTypeId(),
-                                       QString::number(i++) + QLatin1String(" Enum Property"));
-    QStringList enumNames;
-    enumNames << "Enum0" << "Enum1" << "Enum2";
-    item->setAttribute(QLatin1String("enumNames"), enumNames);
-    item->setValue(1);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QtVariantPropertyManager::flagTypeId(),
-                                       QString::number(i++) + QLatin1String(" Flag Property"));
-    QStringList flagNames;
-    flagNames << "Flag0" << "Flag1" << "Flag2";
-    item->setAttribute(QLatin1String("flagNames"), flagNames);
-    item->setValue(5);
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::SizePolicy, QString::number(i++) + QLatin1String(" SizePolicy Property"));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Font, QString::number(i++) + QLatin1String(" Font Property"));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Cursor, QString::number(i++) + QLatin1String(" Cursor Property"));
-    topItem->addSubProperty(item);
-
-    item = variantManager->addProperty(QVariant::Color, QString::number(i++) + QLatin1String(" Color Property"));
-    topItem->addSubProperty(item);
-
-*/
     //QtTreePropertyBrowser *variantEditor = new QtTreePropertyBrowser();
-    ui->variantEditor->setFactoryForManager(variantManager, variantFactory);
-    ui->variantEditor->addProperty(mainItems);
-    for(int i=0; i<3; i++) ui->variantEditor->addProperty(card[i]);
+//    for(int i=0; i<3; i++) ui->variantEditor->addProperty(card[i]);
 //    ui->variantEditor->addProperty(topItem);
     ui->variantEditor->setPropertiesWithoutValueMarked(true);
     ui->variantEditor->setRootIsDecorated(false);
@@ -669,5 +493,37 @@ void cronoacqDlg::on_actionpause_sampling_triggered()
 //    ui->actionsingle_sampling->setEnabled(true);
     emit sample_n(0);
 
+}
+
+
+void cronoacqDlg::on_actionadv_configuration_triggered()
+{
+    QString filter = "text files (*.txt) ;; all files (*.*)";
+    initpars.main.advfilename = QFileDialog::getOpenFileName(this,"open advanced configuration file", QDir::currentPath(), filter);
+    initpropertygrid();
+
+}
+
+
+void cronoacqDlg::on_actionrecord_data_triggered()
+{
+    QString filter = "data files (*.daqb) ;; all files (*.*)";
+    QString path;
+    path=QFileInfo(statuspars.sFileName).absolutePath();
+    if(!QDir(path).exists()) path=QDir::homePath();
+    statuspars.sFileName = QFileDialog::getSaveFileName(this,"save data to file", path, filter);
+    statuspars.bFileOpen=true;
+    ui->actionrecord_data->setEnabled(false);
+    ui->actionstop_recording->setEnabled(true);
+    emit statusChanged(statuspars);
+}
+
+
+void cronoacqDlg::on_actionstop_recording_triggered()
+{
+    statuspars.bFileOpen=false;
+    ui->actionrecord_data->setEnabled(true);
+    ui->actionstop_recording->setEnabled(false);
+    emit statusChanged(statuspars);
 }
 

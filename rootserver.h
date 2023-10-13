@@ -21,6 +21,8 @@ public slots:
 signals:
     void sendconnectflag();
     void updatenofclients(int n);
+    void logmessage(QString message);
+
 
 private:
     bool m_listen;

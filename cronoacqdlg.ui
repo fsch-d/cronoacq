@@ -107,6 +107,9 @@
    <property name="features">
     <set>QDockWidget::DockWidgetClosable|QDockWidget::DockWidgetMovable</set>
    </property>
+   <property name="windowTitle">
+    <string>log widget</string>
+   </property>
    <attribute name="dockWidgetArea">
     <number>8</number>
    </attribute>
@@ -221,8 +224,8 @@
            <string/>
           </property>
           <property name="icon">
-           <iconset theme="edit-undo">
-            <normaloff>.</normaloff>.</iconset>
+           <iconset resource="cronoacq_ressources.qrc">
+            <normaloff>:/icons/fit_reg.svg</normaloff>:/icons/fit_reg.svg</iconset>
           </property>
          </widget>
         </item>
@@ -231,6 +234,62 @@
      </item>
     </layout>
    </widget>
+  </widget>
+  <widget class="QDockWidget" name="objectdockWidget">
+   <property name="features">
+    <set>QDockWidget::DockWidgetClosable|QDockWidget::DockWidgetMovable</set>
+   </property>
+   <property name="windowTitle">
+    <string>DAQ objects</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>4</number>
+   </attribute>
+   <widget class="QWidget" name="dockWidgetContents_2">
+    <layout class="QVBoxLayout" name="verticalLayout_4">
+     <item>
+      <widget class="QTreeView" name="treeView">
+       <property name="autoFillBackground">
+        <bool>true</bool>
+       </property>
+       <property name="midLineWidth">
+        <number>1</number>
+       </property>
+       <property name="alternatingRowColors">
+        <bool>true</bool>
+       </property>
+       <property name="animated">
+        <bool>false</bool>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+  <widget class="QToolBar" name="toolBar_3">
+   <property name="windowTitle">
+    <string>toolBar_3</string>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionrecord_data"/>
+   <addaction name="actionstop_recording"/>
+  </widget>
+  <widget class="QToolBar" name="toolBar_4">
+   <property name="windowTitle">
+    <string>toolBar_4</string>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionadv_configuration"/>
   </widget>
   <action name="actionstart_acquistion">
    <property name="icon">
@@ -262,7 +321,7 @@
   <action name="actionstart_sampling">
    <property name="icon">
     <iconset resource="cronoacq_ressources.qrc">
-     <normaloff>:/icons/play.svg</normaloff>:/icons/play.svg</iconset>
+     <normaloff>:/icons/play_reg.svg</normaloff>:/icons/play_reg.svg</iconset>
    </property>
    <property name="text">
     <string>start sampling</string>
@@ -271,7 +330,7 @@
   <action name="actionsingle_sampling">
    <property name="icon">
     <iconset resource="cronoacq_ressources.qrc">
-     <normaloff>:/icons/playsingle.svg</normaloff>:/icons/playsingle.svg</iconset>
+     <normaloff>:/icons/repeatonce.svg</normaloff>:/icons/repeatonce.svg</iconset>
    </property>
    <property name="text">
     <string>single_sampling</string>
@@ -280,10 +339,37 @@
   <action name="actionpause_sampling">
    <property name="icon">
     <iconset resource="cronoacq_ressources.qrc">
-     <normaloff>:/icons/pause.svg</normaloff>:/icons/pause.svg</iconset>
+     <normaloff>:/icons/pause_reg.svg</normaloff>:/icons/pause_reg.svg</iconset>
    </property>
    <property name="text">
     <string>pause_sampling</string>
+   </property>
+  </action>
+  <action name="actionadv_configuration">
+   <property name="icon">
+    <iconset resource="cronoacq_ressources.qrc">
+     <normaloff>:/icons/conffile.svg</normaloff>:/icons/conffile.svg</iconset>
+   </property>
+   <property name="text">
+    <string>adv configuration</string>
+   </property>
+  </action>
+  <action name="actionrecord_data">
+   <property name="icon">
+    <iconset resource="cronoacq_ressources.qrc">
+     <normaloff>:/icons/record_reg.svg</normaloff>:/icons/record_reg.svg</iconset>
+   </property>
+   <property name="text">
+    <string>record data</string>
+   </property>
+  </action>
+  <action name="actionstop_recording">
+   <property name="icon">
+    <iconset resource="cronoacq_ressources.qrc">
+     <normaloff>:/icons/record_stop_reg.svg</normaloff>:/icons/record_stop_reg.svg</iconset>
+   </property>
+   <property name="text">
+    <string>stop recording</string>
    </property>
   </action>
   <zorder>propertydockWidget</zorder>
