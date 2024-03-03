@@ -1,18 +1,20 @@
 #include "cronoacqdlg.h"
 #include "ui_cronoacqdlg.h"
-#include <ctime>
+#include <QDateTime>
 #include <QDebug>
 #include <QThread>
 #include <QMetaType>
 #include <QDataStream>
+#include <QtNetwork>
 
 #include <QFile>
-#include "qtpropertymanager.h"
 #include "qtvariantproperty.h"
 #include "qttreepropertybrowser.h"
 
 #include "qcustomplot.h"
 #include "treemodel.h"
+
+#include "go4server.h"
 
 
 cronoacqDlg::cronoacqDlg(QWidget *parent)
@@ -25,7 +27,7 @@ cronoacqDlg::cronoacqDlg(QWidget *parent)
 
 
     //Load settings from QSettings
-    QSettings settings("Fischerlab", "cronoACQ");
+    QSettings settings("Fischerlab", "cronoACQ4.1");
     restoreState(settings.value("windowState").toByteArray());
     initpars = settings.value("initpars").value<init_pars>();
 
@@ -63,7 +65,7 @@ cronoacqDlg::cronoacqDlg(QWidget *parent)
 
     initplot();
     inittree();
-    nofclients(0);
+    nofClients_changed(0);
 
 
     //getting the threads up and running
@@ -77,23 +79,62 @@ cronoacqDlg::cronoacqDlg(QWidget *parent)
     acqCtrl->setObjectName("acqctrlThread");
     acqCtrlThread->start();
 
+    server = new go4Server(nullptr, acqCtrl);
+
 
     connect(acqCtrlThread, &QThread::finished, acqCtrl, &QObject::deleteLater);
 
     //Connect signals and slots, e.g., ui to readout thread
-    QObject::connect(this,&cronoacqDlg::initparsChanged,acqCtrl,&acqcontrol::set_initpars);
-    QObject::connect(this,&cronoacqDlg::statusChanged,acqCtrl,&acqcontrol::set_statuspars);
-    QObject::connect(acqCtrl,&acqcontrol::logmessage,this,&cronoacqDlg::logmessage);
-    QObject::connect(ui->actionstart_acquistion,&QAction::triggered,acqCtrl,&acqcontrol::runloop);
-    QObject::connect(ui->actionstop_acquisition,&QAction::triggered,acqCtrl,&acqcontrol::quit,Qt::DirectConnection);
-    QObject::connect(ui->actionrestart_acquisition,&QAction::triggered,acqCtrl,&acqcontrol::restart,Qt::DirectConnection);
-    QObject::connect(acqCtrl,&acqcontrol::sampleready,this,&cronoacqDlg::plotsample);
-    QObject::connect(this,&cronoacqDlg::sample_n,acqCtrl,&acqcontrol::set_nofsamples);
-    QObject::connect(acqCtrl,&acqcontrol::rate,this,&cronoacqDlg::showrate);
-    QObject::connect(acqCtrl,&acqcontrol::nofclients,this,&cronoacqDlg::nofclients);
+    connect(this,&cronoacqDlg::initparsChanged,acqCtrl,&acqcontrol::set_initpars);
+    connect(this,&cronoacqDlg::statusChanged,acqCtrl,&acqcontrol::set_statuspars);
+    connect(acqCtrl,&acqcontrol::logmessage,this,&cronoacqDlg::logmessage);
+    connect(acqCtrl,&acqcontrol::errormessage,this,&cronoacqDlg::errormessage);
+    connect(ui->actionstart_acquistion,&QAction::triggered,acqCtrl,&acqcontrol::startloop);
+    connect(ui->actionstop_acquisition,&QAction::triggered,acqCtrl,&acqcontrol::quit,Qt::DirectConnection);
+    connect(ui->actionrestart_acquisition,&QAction::triggered,acqCtrl,&acqcontrol::restart,Qt::DirectConnection);
+    connect(acqCtrl,&acqcontrol::sampleready,this,&cronoacqDlg::plotsample);
+    connect(this,&cronoacqDlg::sample_n,acqCtrl,&acqcontrol::set_nofsamples);
+    connect(acqCtrl,&acqcontrol::rate,this,&cronoacqDlg::showrate);
+    //connect(acqCtrl,&acqcontrol::nofclients,this,&cronoacqDlg::nofclients);
+    connect(server,&go4Server::nofClients_changed,this,&cronoacqDlg::nofClients_changed);
+    connect(server,&go4Server::nofClients_changed,acqCtrl,&acqcontrol::nofClients_changed, Qt::DirectConnection);
+    connect(server,&go4Server::logmessage,this,&cronoacqDlg::logmessage);
+    connect(server,&go4Server::errormessage,this,&cronoacqDlg::errormessage);
 
 
-    qInfo() << this << "All starts here!";
+    connect(this,&cronoacqDlg::writeDatatoFile,acqCtrl,&acqcontrol::writeDatatoFile);
+    connect(ui->actionstop_recording,&QAction::triggered,acqCtrl,&acqcontrol::stopWritingtoFile);
+    connect(acqCtrl,&acqcontrol::closeDataFile,this,&cronoacqDlg::closeFile);
+
+    //////////////////////////////////////////////////////////////////
+    /// \brief get the tcpip server started for go4
+    ///
+    QString ipAddress;
+    QList<QHostAddress> ipAddressesList = QNetworkInterface::allAddresses();
+    // use the first non-localhost IPv4 address
+    for (int i = 0; i < ipAddressesList.size(); ++i) {
+        if (ipAddressesList.at(i) != QHostAddress::LocalHost &&
+            ipAddressesList.at(i).toIPv4Address()) {
+            ipAddress = ipAddressesList.at(i).toString();
+            break;
+        }
+    }
+    if(!server->listen(QHostAddress::Any,6005))
+    {
+        QMessageBox::critical(this, tr("cronoacq go4 server"),
+                              tr("Unable to start the server: %1.")
+                                  .arg(server->errorString()));
+        close();
+        return;
+    }
+    logmessage(tr("Server started at %1:%2/tcp").arg(ipAddress).arg(server->serverPort()));
+
+    connect(this,&cronoacqDlg::initCards,acqCtrl,&acqcontrol::initCards);
+
+    emit initCards();
+
+    //qInfo() << this << "All starts here!";
+
 
     //
 
@@ -104,9 +145,8 @@ cronoacqDlg::cronoacqDlg(QWidget *parent)
 cronoacqDlg::~cronoacqDlg()
 {
 
-    QSettings settings("Fischerlab", "cronoACQ");
+    QSettings settings("Fischerlab", "cronoACQ4.1");
     QVariant v = QVariant::fromValue(initpars);
-//    qInfo() << v;
 
     settings.setValue("initpars",v);
 
@@ -131,6 +171,15 @@ void cronoacqDlg::logmessage(QString message)
     ui->logBrowser->insertHtml(message);
 }
 
+void cronoacqDlg::errormessage(QString message)
+{
+    logtime();
+    ui->logBrowser->moveCursor(QTextCursor::End);
+    message.prepend("<font color=\"Red\">");
+    message.append("</font>");
+    ui->logBrowser->insertHtml(message);
+}
+
 void cronoacqDlg::plotsample(QVector<double> x, QVector<double> y)
 {
     ui->customPlot->graph(0)->setData(x, y);
@@ -144,7 +193,7 @@ void cronoacqDlg::showrate(int counts)
     ui->lcdRate->display(counts);
 }
 
-void cronoacqDlg::nofclients(int n)
+void cronoacqDlg::nofClients_changed(int n)
 {
     auto noc = QStringLiteral("no of clients: %1").arg(n);
     ui->nofclients->setText(noc);
@@ -187,7 +236,12 @@ void cronoacqDlg::on_propertyChanged(QtProperty *property, const QVariant &val)
         {
             if(property->propertyName()==QString("edge")) initpars.card[statuspars.active_card].chan[statuspars.active_chan].edge=val.toBool();
             if(property->propertyName()==QString("rising")) initpars.card[statuspars.active_card].chan[statuspars.active_chan].rising=val.toBool();
-            if(property->propertyName()==QString("threshhold")) initpars.card[statuspars.active_card].chan[statuspars.active_chan].thresh=val.toInt();
+            if(property->propertyName()==QString("threshhold")){
+                initpars.card[statuspars.active_card].chan[statuspars.active_chan].thresh=val.toInt();
+                QVector<double> x({-1000000,1000000}), y({(double)initpars.card[statuspars.active_card].chan[statuspars.active_chan].thresh ,(double)initpars.card[statuspars.active_card].chan[statuspars.active_chan].thresh});
+                ui->customPlot->graph(1)->setData(x, y);
+                ui->customPlot->replot();
+            }
         }
     }
 
@@ -200,6 +254,8 @@ void cronoacqDlg::on_activeTreeItemChanged(const QModelIndex &index)
 {
     statuspars.active_chan=-1;
     statuspars.active_card=-1;
+    ui->customPlot->graph(0)->setVisible(false);
+    ui->customPlot->graph(1)->setVisible(false);
     if(index.data(Qt::DisplayRole).toString()==QString("card 0")) statuspars.active_card=0;
     else if(index.data(Qt::DisplayRole).toString()==QString("card 1")) statuspars.active_card=1;
     else if(index.data(Qt::DisplayRole).toString()==QString("card 2")) statuspars.active_card=2;
@@ -214,6 +270,18 @@ void cronoacqDlg::on_activeTreeItemChanged(const QModelIndex &index)
         else if(index.data(Qt::DisplayRole).toString()==QString("D")) statuspars.active_chan=3;
         else if(index.data(Qt::DisplayRole).toString()==QString("TDC")) statuspars.active_chan=4;
     }
+
+
+    if(statuspars.active_chan!=-1)
+    {
+        QVector<double> x({-1000000,1000000}), y({(double)initpars.card[statuspars.active_card].chan[statuspars.active_chan].thresh ,(double)initpars.card[statuspars.active_card].chan[statuspars.active_chan].thresh});
+        ui->customPlot->graph(1)->setData(x, y);
+        ui->customPlot->graph(0)->setVisible(true);
+        ui->customPlot->graph(1)->setVisible(true);
+    }
+
+    ui->customPlot->replot();
+
     initpropertygrid();
 
     //qInfo() << "item " << index.data(Qt::DisplayRole) << "   " << index.parent().data(Qt::DisplayRole) << "clicked";
@@ -224,22 +292,26 @@ void cronoacqDlg::on_activeTreeItemChanged(const QModelIndex &index)
 
 void cronoacqDlg::logtime()
 {
-    time_t rawtime;
-    struct tm * timeinfo;
-    char buffer [14];
-    time (&rawtime);
-    timeinfo = localtime (&rawtime);
-
-    strftime (buffer,14,"[%H:%M:%S]  ",timeinfo);
+    QDateTime date = QDateTime::currentDateTime();
+    QString formattedTime = date.toString("[hh:mm:ss] ");
 
     ui->logBrowser->setTextColor( QColor( "blue" ) );
-    ui->logBrowser->append(buffer);
+    ui->logBrowser->append(formattedTime);
 }
 
 void cronoacqDlg::initplot()
 {
     ui->customPlot->clearGraphs();
     ui->customPlot->addGraph();
+
+
+    ui->customPlot->addGraph();
+    QPen ThPen;
+    ThPen.setStyle(Qt::DotLine);
+    ThPen.setColor(Qt::blue);
+    ui->customPlot->graph(1)->setPen(ThPen);
+    ui->customPlot->graph(1)->setVisible(false);
+
     ui->customPlot->xAxis2->setVisible(true);
     ui->customPlot->xAxis2->setTickLabels(false);
     ui->customPlot->yAxis2->setVisible(true);
@@ -253,6 +325,15 @@ void cronoacqDlg::initplot()
     // set axes ranges, so we see all data:
     ui->customPlot->xAxis->setRange(0, 100);
     ui->customPlot->yAxis->setRange(-100, 100);
+
+    if(statuspars.active_chan!=-1)
+    {
+        QVector<double> x({-1000000,1000000}), y({(double)initpars.card[statuspars.active_card].chan[statuspars.active_chan].thresh ,(double)initpars.card[statuspars.active_card].chan[statuspars.active_chan].thresh});
+        ui->customPlot->graph(1)->setData(x, y);
+        ui->customPlot->graph(0)->setVisible(true);
+        ui->customPlot->graph(1)->setVisible(true);
+    }
+
     ui->customPlot->replot();
 }
 
@@ -267,7 +348,7 @@ void cronoacqDlg::inittree()
         file.open(QIODevice::ReadOnly);
         lines =file.readAll();
         file.close();
-        QSettings settings("Fischerlab", "cronoACQ");
+        QSettings settings("Fischerlab", "cronoACQ4.1");
         QVariant v;
         v=lines;
         settings.setValue("treestructure", v);
@@ -275,7 +356,7 @@ void cronoacqDlg::inittree()
     }
     else
     {
-        QSettings settings("Fischerlab", "cronoACQ");
+        QSettings settings("Fischerlab", "cronoACQ4.1");
         lines=settings.value("treestructure").toByteArray();
     }
 
@@ -327,7 +408,7 @@ void cronoacqDlg::initpropertygrid()
         item->setValue(initpars.main.sourcechan);
         topItem->addSubProperty(item);
 
-        item = variantManager->addProperty(QVariant::Int, QLatin1String("range start"));
+        item = variantManager->addProperty(QMetaType::Int, QLatin1String("range start"));
         item->setValue(initpars.main.range_start);
         item->setAttribute(QLatin1String("minimum"),-100000000);
         item->setAttribute(QLatin1String("maximum"), 100000000);
@@ -335,17 +416,17 @@ void cronoacqDlg::initpropertygrid()
         item->setEnabled(true);
         topItem->addSubProperty(item);
 
-        item = variantManager->addProperty(QVariant::Int, QLatin1String("range stop"));
+        item = variantManager->addProperty(QMetaType::Int, QLatin1String("range stop"));
         item->setValue(initpars.main.range_stop);
         item->setAttribute(QLatin1String("minimum"),-100000000);
         item->setAttribute(QLatin1String("maximum"), 100000000);
         item->setAttribute(QLatin1String("singleStep"), 1);
         item->setEnabled(true);
         topItem->addSubProperty(item);
-        item = variantManager->addProperty(QVariant::Bool, QLatin1String("advanced configuration"));
+        item = variantManager->addProperty(QMetaType::Bool, QLatin1String("advanced configuration"));
         item->setValue(initpars.main.advconf);
 
-        QtVariantProperty *subItem = variantManager->addProperty(QVariant::String, QLatin1String("configuration file"));
+        QtVariantProperty *subItem = variantManager->addProperty(QMetaType::QString, QLatin1String("configuration file"));
         subItem->setValue(initpars.main.advfilename);
         if(!initpars.main.advconf) subItem->setEnabled(false);
         item->addSubProperty(subItem);
@@ -361,13 +442,13 @@ void cronoacqDlg::initpropertygrid()
     case 1:
     {
         QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("card settings"));
-        QtVariantProperty *item = variantManager->addProperty(QVariant::Int, QLatin1String("precursor"));
+        QtVariantProperty *item = variantManager->addProperty(QMetaType::Int, QLatin1String("precursor"));
         item->setValue(initpars.card[statuspars.active_card].cardPars.precursor);
         topItem->addSubProperty(item);
-        item = variantManager->addProperty(QVariant::Int, QLatin1String("length"));
+        item = variantManager->addProperty(QMetaType::Int, QLatin1String("length"));
         item->setValue(initpars.card[statuspars.active_card].cardPars.length);
         topItem->addSubProperty(item);
-        item = variantManager->addProperty(QVariant::Bool, QLatin1String("retrigger"));
+        item = variantManager->addProperty(QMetaType::Bool, QLatin1String("retrigger"));
         item->setValue(initpars.card[statuspars.active_card].cardPars.retrigger);
         topItem->addSubProperty(item);
 
@@ -381,13 +462,13 @@ void cronoacqDlg::initpropertygrid()
     case 2:
     {
         QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("channel settings"));
-        QtVariantProperty *item = variantManager->addProperty(QVariant::Bool, QLatin1String("edge"));
+        QtVariantProperty *item = variantManager->addProperty(QMetaType::Bool, QLatin1String("edge"));
         item->setValue(initpars.card[statuspars.active_card].chan[statuspars.active_chan].edge);
         topItem->addSubProperty(item);
-        item = variantManager->addProperty(QVariant::Bool, QLatin1String("rising"));
+        item = variantManager->addProperty(QMetaType::Bool, QLatin1String("rising"));
         item->setValue(initpars.card[statuspars.active_card].chan[statuspars.active_chan].rising);
         topItem->addSubProperty(item);
-        item = variantManager->addProperty(QVariant::Int, QLatin1String("threshhold"));
+        item = variantManager->addProperty(QMetaType::Int, QLatin1String("threshhold"));
         item->setValue(initpars.card[statuspars.active_card].chan[statuspars.active_chan].thresh);
         topItem->addSubProperty(item);
 
@@ -418,12 +499,6 @@ void cronoacqDlg::on_resetgraphButton_clicked()
     initplot();
 }
 
-
-/*void cronoacqDlg::on_treeWidget_itemClicked(QTreeWidgetItem *item, int column)
-{
-    if(item->parent()) qInfo() << item->text(0) << "  " << item->parent()->text(column);
-    else qInfo() << item->text(column);
-}*/
 
 
 void cronoacqDlg::on_actionstart_acquistion_triggered()
@@ -501,29 +576,53 @@ void cronoacqDlg::on_actionadv_configuration_triggered()
     QString filter = "text files (*.txt) ;; all files (*.*)";
     initpars.main.advfilename = QFileDialog::getOpenFileName(this,"open advanced configuration file", QDir::currentPath(), filter);
     initpropertygrid();
-
+    emit initparsChanged(initpars);
 }
 
 
 void cronoacqDlg::on_actionrecord_data_triggered()
 {
-    QString filter = "data files (*.daqb) ;; all files (*.*)";
+    QString filter = "data files (*.daqc) ;; all files (*.*)";
     QString path;
     path=QFileInfo(statuspars.sFileName).absolutePath();
     if(!QDir(path).exists()) path=QDir::homePath();
-    statuspars.sFileName = QFileDialog::getSaveFileName(this,"save data to file", path, filter);
+    QString filename = QFileDialog::getSaveFileName(this,"save data to file", path, filter);
+
+    if(!filename.endsWith(".daqc",Qt::CaseInsensitive)) filename.append(".daqc");
+
+    sFile = new QFile(filename);
+    if(!sFile->open(QIODevice::WriteOnly))
+    {
+        logmessage("Couldn't open file ...");
+        return;
+    }
+
+    statuspars.sFileName = filename;
     statuspars.bFileOpen=true;
     ui->actionrecord_data->setEnabled(false);
     ui->actionstop_recording->setEnabled(true);
     emit statusChanged(statuspars);
+    emit writeDatatoFile(sFile);
+    logmessage(tr("file %1 opened").arg(filename));
 }
 
 
-void cronoacqDlg::on_actionstop_recording_triggered()
+void cronoacqDlg::closeFile()
 {
     statuspars.bFileOpen=false;
     ui->actionrecord_data->setEnabled(true);
     ui->actionstop_recording->setEnabled(false);
+    sFile->close();
+    delete sFile;
+    logmessage(tr("file %1 closed").arg(statuspars.sFileName));
+    statuspars.sFileName="";
+    emit statusChanged(statuspars);
+}
+
+
+void cronoacqDlg::on_maintrigger_stateChanged(int arg1)
+{
+    statuspars.m_bTrigOnly=arg1;
     emit statusChanged(statuspars);
 }
 

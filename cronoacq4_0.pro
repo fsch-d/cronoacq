@@ -1,4 +1,4 @@
-QT       += core gui
+QT       += core gui network
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets printsupport
 
@@ -11,7 +11,8 @@ QMAKE_CXXFLAGS += -O1
 
 SOURCES += \
     acqcontrol.cpp \
-    go4connectionthread.cpp \
+    go4server.cpp \
+    go4socket.cpp \
     main.cpp \
     cronoacqdlg.cpp \
     qcustomplot.cpp \
@@ -23,7 +24,6 @@ SOURCES += \
     qtpropertybrowser/qtpropertymanager.cpp \
     qtpropertybrowser/qttreepropertybrowser.cpp \
     qtpropertybrowser/qtvariantproperty.cpp \
-    rootserver.cpp \
     treeitem.cpp \
     treemodel.cpp
 
@@ -38,7 +38,8 @@ HEADERS += \
     driver/include/crono_interface.h \
     driver/include/crono_tools.h \
     driver/include/tdcmanager.h \
-    go4connectionthread.h \
+    go4server.h \
+    go4socket.h \
     qcustomplot.h \
     qtpropertybrowser/qtbuttonpropertybrowser.h \
     qtpropertybrowser/qteditorfactory.h \
@@ -48,7 +49,6 @@ HEADERS += \
     qtpropertybrowser/qtpropertymanager.h \
     qtpropertybrowser/qttreepropertybrowser.h \
     qtpropertybrowser/qtvariantproperty.h \
-    rootserver.h \
     treeitem.h \
     treemodel.h
 
@@ -71,14 +71,15 @@ RESOURCES += \
 DISTFILES += \
     tree.txt
 
-win32:CONFIG(release, debug|release): LIBS += -L$$PWD/../../../../../../../root_v6.28.06/lib/ -llibCore -llibThread -llibRIO -llibNet
-else:win32:CONFIG(debug, debug|release): LIBS += -L$$PWD/../../../../../../../root_v6.28.06/lib/ -llibCore -llibThread -llibRIO -llibNet
-else:unix: LIBS += -L$$PWD/../../../../../../../root_v6.28.06/lib/ -llibCore -llibThread -llibRIO -llibNet
+#win32:CONFIG(release, debug|release): LIBS += -L$$PWD/../../../../../../../root_v6.28.06/lib/ -llibCore -llibThread -llibRIO -llibNet
+#else:win32:CONFIG(debug, debug|release): LIBS += -L$$PWD/../../../../../../../root_v6.28.06/lib/ -llibCore -llibThread -llibRIO -llibNet
+#else:unix: LIBS += -L$$PWD/../../../../../../../root_v6.28.06/lib/ -llibCore -llibThread -llibRIO -llibNet
 
-INCLUDEPATH += $$PWD/../../../../../../../root_v6.28.06/include
-DEPENDPATH += $$PWD/../../../../../../../root_v6.28.06/include
+#INCLUDEPATH += $$PWD/../../../../../../../root_v6.28.06/include
+#DEPENDPATH += $$PWD/../../../../../../../root_v6.28.06/include
 
-unix|win32: LIBS += -L$$PWD/driver/x64/ -lcrono_tools_64 -lndigo_driver_64
+win32: LIBS += -L$$PWD/driver/x64/ -lcrono_tools_64 -lndigo_driver_64
+unix: LIBS += -L$$PWD/../../ndigo5g_babel/lib/ -lndigo_driver
 
-INCLUDEPATH += $$PWD/driver/include
-DEPENDPATH += $$PWD/driver/include
+INCLUDEPATH += $$PWD/../../ndigo5g_babel/include
+DEPENDPATH += $$PWD/../../ndigo5g_babel/include

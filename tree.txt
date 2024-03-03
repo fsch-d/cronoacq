@@ -1,17 +1,23 @@
 main
-card 0
+card 0 (5G)
     A
     B
     C
     D
     TDC
-card 1
+card 1 (5G)
     A
     B
     C
     D
     TDC
-card 2
+card 2 (5G)
+    A
+    B
+    C
+    D
+    TDC
+card 3 (250M)
     A
     B
     C

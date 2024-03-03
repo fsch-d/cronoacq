@@ -9,8 +9,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>910</width>
-    <height>700</height>
+    <width>1113</width>
+    <height>837</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -101,7 +101,7 @@
    <property name="minimumSize">
     <size>
      <width>274</width>
-     <height>139</height>
+     <height>144</height>
     </size>
    </property>
    <property name="features">
@@ -229,6 +229,16 @@
           </property>
          </widget>
         </item>
+        <item row="0" column="1">
+         <widget class="QCheckBox" name="maintrigger">
+          <property name="layoutDirection">
+           <enum>Qt::RightToLeft</enum>
+          </property>
+          <property name="text">
+           <string>apply main trigger window</string>
+          </property>
+         </widget>
+        </item>
        </layout>
       </widget>
      </item>
@@ -291,6 +301,34 @@
    </attribute>
    <addaction name="actionadv_configuration"/>
   </widget>
+  <widget class="QMenuBar" name="menuBar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1113</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menuDAQ">
+    <property name="title">
+     <string>DAQ</string>
+    </property>
+    <addaction name="actionstart_acquistion"/>
+    <addaction name="actionrestart_acquisition"/>
+    <addaction name="actionstop_acquisition"/>
+    <addaction name="separator"/>
+    <addaction name="actionstart_sampling"/>
+    <addaction name="actionsingle_sampling"/>
+    <addaction name="actionpause_sampling"/>
+    <addaction name="separator"/>
+    <addaction name="actionrecord_data"/>
+    <addaction name="actionstop_recording"/>
+    <addaction name="separator"/>
+    <addaction name="actionadv_configuration"/>
+   </widget>
+   <addaction name="menuDAQ"/>
+  </widget>
   <action name="actionstart_acquistion">
    <property name="icon">
     <iconset resource="cronoacq_ressources.qrc">
@@ -306,7 +344,7 @@
      <normaloff>:/icons/restartacq.svg</normaloff>:/icons/restartacq.svg</iconset>
    </property>
    <property name="text">
-    <string>restart acquisition</string>
+    <string>sync settings</string>
    </property>
   </action>
   <action name="actionstop_acquisition">
@@ -333,7 +371,10 @@
      <normaloff>:/icons/repeatonce.svg</normaloff>:/icons/repeatonce.svg</iconset>
    </property>
    <property name="text">
-    <string>single_sampling</string>
+    <string>show next trace</string>
+   </property>
+   <property name="toolTip">
+    <string>show next trace</string>
    </property>
   </action>
   <action name="actionpause_sampling">

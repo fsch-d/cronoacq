@@ -3,12 +3,11 @@
 
 #include <QMainWindow>
 #include <QMetaType>
+#include <QFile>
 
 #include "acqcontrol.h"
-#include "qcustomplot.h"
-#include "qtpropertymanager.h"
 #include "qtvariantproperty.h"
-
+#include "go4server.h"
 
 
 QT_BEGIN_NAMESPACE
@@ -23,17 +22,23 @@ public:
     cronoacqDlg(QWidget *parent = nullptr);
     ~cronoacqDlg();
 
+
+
 public slots:
     void logmessage(QString message);
+    void errormessage(QString message);
     void plotsample(QVector<double> x,QVector<double> y);
     void showrate(int counts);
-    void nofclients(int n);
+    void nofClients_changed(int n);
+    void closeFile();
 
 
 signals:
+    void initCards();
     void sample_n(int n); //request samples from acqcontrol for QCustomPlot
     void statusChanged(status_pars status); //active card/channel changed
     void initparsChanged(init_pars ip);
+    void writeDatatoFile(QFile *dataFile);
 
 private slots:
     void on_activeTreeItemChanged(const QModelIndex &index);
@@ -61,7 +66,8 @@ private slots:
 
     void on_actionrecord_data_triggered();
 
-    void on_actionstop_recording_triggered();
+
+    void on_maintrigger_stateChanged(int arg1);
 
 private:
     void logtime();
@@ -75,8 +81,11 @@ private:
 
 
 
-    QThread *acqCtrlThread;
     acqcontrol *acqCtrl;
+    QThread *acqCtrlThread;
+    go4Server *server;
+    QFile *sFile;
+
 
     init_pars initpars;
     status_pars statuspars;

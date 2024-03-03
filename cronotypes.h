@@ -6,6 +6,7 @@
 #include <QDataStream>
 
 #define NR_CARDS 3
+#define GO4_BUFFERSIZE 512
 
 
 typedef struct {
@@ -87,15 +88,14 @@ Q_DECLARE_METATYPE(init_pars)
 struct status_pars {
     int active_card;
     int active_chan;
-    //int iRate;
-    //bool bIsRunning;
-    //bool bIsConnected;
+    bool m_bTrigOnly;
     bool bFileOpen;
     QString sFileName;
     status_pars()
     {
         active_card=-1;
         active_chan=-1;
+        m_bTrigOnly=false;
         bFileOpen=false;
         sFileName=QString("");
     }
@@ -103,17 +103,17 @@ struct status_pars {
 
 
 typedef struct {
-    int channel;
-    quint64 time;
+    qint64 channel;
+    qint64 time;
 } bufferEvnt;
 
 
 typedef struct {
+    bool validTrigger;
     int trigger_index;
     int flags;
-    quint64 timestamp;
+    qint64 timestamp;
     int packet_count;
-    char* data; //ndigo data packets
 } evnt_group;
 
 
