@@ -13,6 +13,8 @@
 #include "cronotypes.h"
 
 
+#define BUFFER_SIZE_250M (1 << 21)		//    2 MB
+#define BUFFER_SIZE_5G (1 << 23)
 
 class acqcontrol : public QObject
 {

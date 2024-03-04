@@ -11,6 +11,7 @@
 
 #include "Ndigo_common_interface.h"
 #include "Ndigo_interface.h"
+#include "Ndigo250M_interface.h"
 
 
 
@@ -405,8 +406,7 @@ int acqcontrol::initCards()
 
     //Who is the master?
 
-    for (int i = 0; i < ndigoCount; i++) {
-
+    for (int i = 0; i < ndigoCount && i < NR_CARDS; i++) {
         ndigo_get_default_init_parameters(&init_params[i]);
         init_params[i].card_index = i;
         init_params[i].version = NDIGO_API_VERSION;
@@ -417,18 +417,46 @@ int acqcontrol::initCards()
         init_params[i].is_slave = (i != 0);// ((initpars.main.sourcecard < ndigoCount) ? initpars.main.sourcecard : 0));
         init_params[i].sync_period = 4;
         init_params[i].multiboard_sync = 1;
-        init_params[i].buffer_size[0] = 1 << 23;
+        init_params[i].buffer_size[0] = BUFFER_SIZE_5G;
     }
 
-
-    // Initialize all Ndigo boards
-    for (int i = 0; i < ndigoCount; i++) {
+    // Initialize all Ndigo5G boards
+    for (int i = 0; i < ndigoCount && i < NR_CARDS; i++) {
         ndigos[i] = ndigo_init(&init_params[i], &error_code, &error_message);
         qInfo() << error_code << error_message;
     }
     if (error_code)
     {
-        logmsg = tr("Error %1 during ADC - init: %2 ...").arg(error_code).arg(error_message);
+        logmsg = tr("Error %1 during ADC (5G) - init: %2 ...").arg(error_code).arg(error_message);
+        emit errormessage(logmsg);
+
+        return 1;
+    }
+
+
+
+    // initialize 250M cards
+    for (int i = ndigoCount; i < (ndigoCount + ndigo250mCount) && i < NR_CARDS; i++) {
+        ndigo250m_get_default_init_parameters(&init_params[i]);
+        init_params[i].card_index = i;
+        init_params[i].buffer_size[i] = BUFFER_SIZE_250M;
+        init_params[i].hptdc_sync_enabled = 0;
+        init_params[i].board_id = i;
+        init_params[i].drive_external_clock = 0;
+        init_params[i].use_external_clock = 1;
+        init_params[i].is_slave = 1;// ((initpars.main.sourcecard < ndigoCount) ? initpars.main.sourcecard : 0));
+        init_params[i].sync_period = 4;
+        init_params[i].multiboard_sync = 1;
+    }
+
+    // Initialize all Ndigo250 boards
+    for (int i = ndigoCount; i < (ndigoCount + ndigo250mCount) && i < NR_CARDS; i++) {
+        ndigos[i] = ndigo250m_init(&init_params[i], &error_code, &error_message);
+        qInfo() << error_code << error_message;
+    }
+    if (error_code)
+    {
+        logmsg = tr("Error %1 during ADC (250M) - init: %2 ...").arg(error_code).arg(error_message);
         emit errormessage(logmsg);
 
         return 1;
