@@ -5,8 +5,9 @@
 #include <QMetaType>
 #include <QDataStream>
 
-#define NR_CARDS 3
-#define GO4_BUFFERSIZE 512
+#define NR_CARDS 4 //total of all cards (5G + 250M)
+#define NR_250MCARDS 1 //
+#define GO4_BUFFERSIZE 512 //number of time signals per online event
 
 
 typedef struct {

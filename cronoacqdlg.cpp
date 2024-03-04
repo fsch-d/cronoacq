@@ -256,14 +256,16 @@ void cronoacqDlg::on_activeTreeItemChanged(const QModelIndex &index)
     statuspars.active_card=-1;
     ui->customPlot->graph(0)->setVisible(false);
     ui->customPlot->graph(1)->setVisible(false);
-    if(index.data(Qt::DisplayRole).toString()==QString("card 0")) statuspars.active_card=0;
-    else if(index.data(Qt::DisplayRole).toString()==QString("card 1")) statuspars.active_card=1;
-    else if(index.data(Qt::DisplayRole).toString()==QString("card 2")) statuspars.active_card=2;
+    if(index.data(Qt::DisplayRole).toString()==QString("card 0 (5G)")) statuspars.active_card=0;
+    else if(index.data(Qt::DisplayRole).toString()==QString("card 1 (5G)")) statuspars.active_card=1;
+    else if(index.data(Qt::DisplayRole).toString()==QString("card 2 (5G)")) statuspars.active_card=2;
+    else if(index.data(Qt::DisplayRole).toString()==QString("card 3 (250M)")) statuspars.active_card=3;
     else
     {
-        if(index.parent().data(Qt::DisplayRole).toString()==QString("card 0")) statuspars.active_card=0;
-        else if(index.parent().data(Qt::DisplayRole).toString()==QString("card 1")) statuspars.active_card=1;
-        else if(index.parent().data(Qt::DisplayRole).toString()==QString("card 2")) statuspars.active_card=2;
+        if(index.parent().data(Qt::DisplayRole).toString()==QString("card 0 (5G)")) statuspars.active_card=0;
+        else if(index.parent().data(Qt::DisplayRole).toString()==QString("card 1 (5G)")) statuspars.active_card=1;
+        else if(index.parent().data(Qt::DisplayRole).toString()==QString("card 2 (5G)")) statuspars.active_card=2;
+        else if(index.parent().data(Qt::DisplayRole).toString()==QString("card 3 (250M)")) statuspars.active_card=3;
         if(index.data(Qt::DisplayRole).toString()==QString("A")) statuspars.active_chan=0;
         else if(index.data(Qt::DisplayRole).toString()==QString("B")) statuspars.active_chan=1;
         else if(index.data(Qt::DisplayRole).toString()==QString("C")) statuspars.active_chan=2;
@@ -395,7 +397,7 @@ void cronoacqDlg::initpropertygrid()
         QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("main settings"));
         QtVariantProperty *item = variantManager->addProperty(QtVariantPropertyManager::enumTypeId(), QLatin1String("source card"));
         QStringList enumNames;
-        enumNames << "card 0" << "card 1" << "card 2";
+        enumNames << "card 0" << "card 1" << "card 2" << "card 3";
         item->setAttribute(QLatin1String("enumNames"), enumNames);
         item->setValue(initpars.main.sourcecard);
         topItem->addSubProperty(item);

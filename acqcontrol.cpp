@@ -375,7 +375,7 @@ int acqcontrol::initCards()
     QString logmsg;
 
     //Set up initialization struct with board 0 as master
-    //Find out how many Ndigo boards are present
+    //Find out how many Ndigo5G boards are present
     ndigoCount = ndigo_count_devices(&error_code, &error_message);
 
     if (error_message != QString("OK")) {
@@ -384,7 +384,20 @@ int acqcontrol::initCards()
     }
 
     logmsg = tr("ndigo_count_devices returns: %1").arg(error_message) + " ... ";
-    logmsg = logmsg + tr("the number of boards is: %1").arg(ndigoCount);
+    logmsg = logmsg + tr("the number of 5G boards is: %1").arg(ndigoCount);
+
+    emit logmessage(logmsg);
+
+    //Find out how many Ndigo250M  boards are present
+    ndigo250mCount = ndigo250m_count_devices(&error_code, &error_message);
+
+    if (error_message != QString("OK")) {
+        emit errormessage(tr("Initialization error!!!"));
+        return 1;
+    }
+
+    logmsg = tr("ndigo_count_devices returns: %1").arg(error_message) + " ... ";
+    logmsg = logmsg + tr("the number of 250M boards is: %1").arg(ndigo250mCount);
 
     emit logmessage(logmsg);
 

@@ -9,6 +9,7 @@
 #include <QFile>
 #include "Ndigo_common_interface.h"
 #include "Ndigo_interface.h"
+#include "Ndigo250M_interface.h"
 #include "cronotypes.h"
 
 
@@ -69,6 +70,7 @@ private:
     int m_nofsamples;
 
     int ndigoCount;
+    int ndigo250mCount;
     int nofClients;
 
     int filesize;
@@ -85,8 +87,13 @@ private:
     ndigo_init_parameters init_params[NR_CARDS];
     ndigo_device* ndigos[NR_CARDS];
     ndigo_static_info ndigo_info[NR_CARDS];
-    ndigo_configuration conf[NR_CARDS];
     ndigo_param_info ndigo_paramInfo[NR_CARDS];
+
+
+    ndigo_configuration conf[NR_CARDS - NR_250MCARDS];
+    ndigo250m_configuration conf250m;
+
+
 
     //own event buffer
     evnt_group event;
