@@ -397,7 +397,7 @@ void cronoacqDlg::initpropertygrid()
         QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("main settings"));
         QtVariantProperty *item = variantManager->addProperty(QtVariantPropertyManager::enumTypeId(), QLatin1String("source card"));
         QStringList enumNames;
-        enumNames << "card 0" << "card 1" << "card 2" << "card 3";
+        enumNames << "card 0" << "card 1" << "card 2";
         item->setAttribute(QLatin1String("enumNames"), enumNames);
         item->setValue(initpars.main.sourcecard);
         topItem->addSubProperty(item);

@@ -79,7 +79,7 @@ DISTFILES += \
 #DEPENDPATH += $$PWD/../../../../../../../root_v6.28.06/include
 
 win32: LIBS += -L$$PWD/driver/x64/ -lcrono_tools_64 -lndigo_driver_64
-unix: LIBS += -L$$PWD/../../ndigo5g_babel/lib/ -lndigo_driver
+unix: LIBS += -L$$PWD/../../ndigo5g_babel/lib/x64/ -lndigo_driver
 
 INCLUDEPATH += $$PWD/../../ndigo5g_babel/include
 DEPENDPATH += $$PWD/../../ndigo5g_babel/include

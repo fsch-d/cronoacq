@@ -83,16 +83,16 @@ void acqcontrol::acqloop()
 
 
     QString strError;
-    int trigcardNo = cardNO_of_PCI_ID[initpars.main.sourcecard];
+    int trigcardNo = initpars.main.sourcecard;
 
 
     //relative timing is sensitive to the order
-    //card with clock master (i.e., card0) needs to go last
+    //card with clock master (i.e., card0) needs to go last...
 
-    for (int i = 0; i < ndigoCount && m_isrunning; i++)
+    for (int i = ndigoCount + ndigo250mCount - 1; i >= 0 && m_isrunning; i--)
     {
         qint32  ndigo_status=-1;
-        ndigo_status= ndigo_start_capture(ndigos[PCI_ID_of_card[i]]);
+        ndigo_status= ndigo_start_capture(ndigos[i]);
         if (ndigo_status)
         {
             strError = tr("Error in start_capture': error %1 in device %2").arg(ndigo_status & 0xffffff).arg((ndigo_status & 0xf0000000) >> 24);
@@ -101,6 +101,7 @@ void acqcontrol::acqloop()
             return;
         }
     }
+
     emit logmessage(tr("ACQ loop started!"));
 
 
@@ -124,6 +125,13 @@ void acqcontrol::acqloop()
         ndigo_read_in in;
         ndigo_read_out out;
         in.acknowledge_last_read = true;
+
+
+        ndigo250m_read_in in250m;
+        in250m.acknowledge_last_read = 0;
+        in250m.mask = 0;
+        ndigo250m_read_out out250m;
+
 
 
         int readoutErr = -1;
@@ -166,25 +174,45 @@ void acqcontrol::acqloop()
         QDataStream fileOut(sFile);
 
 
+        int readoutErr250m = -1;
 
-        for(int i=-1; i<ndigoCount; i++) //do the actual work
+        for(int i=-1; i<ndigoCount + ndigo250mCount * NDIGO250M_DMA_COUNT; i++) //do the actual work
         {
             volatile ndigo_packet* packet;
+            int c = -1; int dma = 0;
             if(i==-1 && readoutErr == 0) packet = out.first_packet; // read trigger card first
             else if (i==trigcardNo || i==-1) continue;
-            else if (ndigo_read(ndigos[i], &in, &out) == 0)  // read the remainig cards
-            {
-                packet = out.first_packet;
-                b_nodata=false;
+            else if (i < ndigoCount){
+                if (ndigo_read(ndigos[i], &in, &out) == 0)  // read the remainig 5G cards
+                {
+                    packet = out.first_packet;
+                    b_nodata=false;
+                }
+                else continue;
+            }
+            else if (i >= ndigoCount){// read 250M card
+                c = qFloor((double)(i-ndigoCount)/(double)NDIGO250M_DMA_COUNT) + ndigoCount; // 250M card number
+                dma = i - ndigoCount - (c - ndigoCount) * NDIGO250M_DMA_COUNT; // DMA channel
+                if( dma == 0 ) readoutErr250m = ndigo250m_read(ndigos[c], &in250m, &out250m);
+                //qInfo() << "Attempt to read 250M card. readoutErr = " << readoutErr250m;
+                if(dma < NDIGO250M_DMA_COUNT && dma >= 0 && readoutErr250m == 0){
+                    packet = out250m.first_packet[dma];
+                    if (out250m.error_code[dma] != NDIGO_READ_OK || !packet) continue;
+                    //qInfo() << "Data in 250M card. Timestamp: " << packet->timestamp << ", channel: " << packet->channel;
+                }
+                if (out250m.error_code[dma] != NDIGO_READ_OK){
+                    qInfo() << "readoutErr = " << readoutErr250m << ", error code =" << out250m.error_code[dma];
+                    continue;
+                }
             }
             else continue;
 
-            int n= (i==-1) ? trigcardNo : i;
+            int n= (i==-1) ? trigcardNo : (( i < ndigoCount ) ? i : c);
 
             if(!event.validTrigger && !m_sampleNow) //if nothing is to do here, start over
                 continue;
 
-            while (packet <= out.last_packet)
+            while (packet <= (c == -1 ? out.last_packet : out250m.end[dma]))
             {
                 if (packet->type == NDIGO_PACKET_TYPE_16_BIT_SIGNED || packet->type == NDIGO_PACKET_TYPE_TDC_DATA) //ADC or TDC channel
                 {
@@ -293,11 +321,10 @@ void acqcontrol::acqloop()
 
 
 
-    for (int m = 0; m < ndigoCount; m++) {
+    for (int m = 0; m < ndigoCount + ndigo250mCount; m++) {
         ndigo_stop_capture(ndigos[m]);
         ndigo_close(ndigos[m]);
     }
-
 
     if(m_restart){
         emit startloop();
@@ -397,7 +424,7 @@ int acqcontrol::initCards()
         return 1;
     }
 
-    logmsg = tr("ndigo_count_devices returns: %1").arg(error_message) + " ... ";
+    logmsg = tr("ndigo250m_count_devices returns: %1").arg(error_message) + " ... ";
     logmsg = logmsg + tr("the number of 250M boards is: %1").arg(ndigo250mCount);
 
     emit logmessage(logmsg);
@@ -406,9 +433,36 @@ int acqcontrol::initCards()
 
     //Who is the master?
 
-    for (int i = 0; i < ndigoCount && i < NR_CARDS; i++) {
+    for (int i = 0; i < ndigoCount && i < NR_CARDS; i++) {// get static info of each board
         ndigo_get_default_init_parameters(&init_params[i]);
         init_params[i].card_index = i;
+        ndigo_device* ndigo_temp = ndigo_init(&init_params[i], &error_code, &error_message);
+        if (error_code)
+        {
+            logmsg = tr("Error %1 during ADC (5G) - init: %2 ...").arg(error_code).arg(error_message);
+            emit errormessage(logmsg);
+            return 1;
+        }
+        ndigo_get_static_info(ndigo_temp, &ndigo_info[i]);
+        ndigo_close(ndigo_temp);
+    }
+    for (int i = 0; i < ndigoCount  && i < NR_CARDS; i++)
+    {
+        int serial = ndigo_info[i].board_serial;
+        int device_id = 0;
+
+        for (int k = 0; k < ndigoCount; k++)
+        {
+            if (serial < ndigo_info[k].board_serial) device_id++;
+
+        }
+        qInfo() << "ndigo serial: " << serial << ", Device ID: " << device_id;
+        init_params[device_id].card_index = i;
+    }
+
+
+    //set all init_params for 5G boards
+    for (int i = 0; i < ndigoCount && i < NR_CARDS; i++) {
         init_params[i].version = NDIGO_API_VERSION;
         init_params[i].hptdc_sync_enabled = 0;
         init_params[i].board_id = i;
@@ -438,8 +492,8 @@ int acqcontrol::initCards()
     // initialize 250M cards
     for (int i = ndigoCount; i < (ndigoCount + ndigo250mCount) && i < NR_CARDS; i++) {
         ndigo250m_get_default_init_parameters(&init_params[i]);
-        init_params[i].card_index = i;
-        init_params[i].buffer_size[i] = BUFFER_SIZE_250M;
+        init_params[i].card_index = 0;
+        for (int j = 0; j < NDIGO250M_DMA_COUNT; j++) init_params[i].buffer_size[j] = BUFFER_SIZE_250M;
         init_params[i].hptdc_sync_enabled = 0;
         init_params[i].board_id = i;
         init_params[i].drive_external_clock = 0;
@@ -466,25 +520,6 @@ int acqcontrol::initCards()
     // read general info from the ADC-card (serial number, firmware version, ...):
     for (int i = 0; i < ndigoCount; i++) ndigo_get_static_info(ndigos[i], &ndigo_info[i]);
 
-    for (int i = 0; i < ndigoCount; i++) ndigo_set_board_id(ndigos[i], i);
-
-    if (ndigoCount > 1)
-    {
-        for (int i = 0; i < ndigoCount; i++)
-        {
-            int serial = ndigo_info[i].board_serial;
-            int device_id = 0;
-
-            for (int k = 0; k < ndigoCount; k++)
-            {
-                if (serial < ndigo_info[k].board_serial) device_id++;
-
-            }
-            ndigo_set_board_id(ndigos[i], device_id);
-            PCI_ID_of_card[i] = device_id;
-            cardNO_of_PCI_ID[device_id] = i;
-        }
-    }
     ///////////////////////////////////////////////////////////////////////////////
 
     return 0;
@@ -497,9 +532,10 @@ int acqcontrol::initAcq()
     const char *error_message;
 
 
-    for (int i = 0; i < ndigoCount; i++) {
-        ndigos[i] = ndigo_init(&init_params[i], &error_code, &error_message);
-        qInfo() << error_code << error_message;
+    for (int i = 0; i < ndigoCount + ndigo250mCount; i++) {
+        if (i < ndigoCount) ndigos[i] = ndigo_init(&init_params[i], &error_code, &error_message); //init 5G cards
+        else ndigos[i] = ndigo250m_init(&init_params[i], &error_code, &error_message); //init 250M cards
+        qInfo() << error_code << error_message << i;
     }
     if (error_code)
     {
@@ -509,84 +545,145 @@ int acqcontrol::initAcq()
         return 1;
     }
 
-    if (ndigoCount > 1)
-    {
-        for (int i = 0; i < ndigoCount; i++)
-        {
-            ndigo_set_board_id(ndigos[i], PCI_ID_of_card[i]);
-        }
-    }
 
-
-    //Ndigos configure zero suppression etc.
+    //Ndigos configure zero suppression etc. 5G
     for (int i = 0; i < ndigoCount; i++) {
-        int PCI_ID = PCI_ID_of_card[i];
-        int status = ndigo_get_default_configuration(ndigos[i], &conf[PCI_ID]);
+        int status = ndigo_get_default_configuration(ndigos[i], &conf[i]);
         if(status)
         {
             emit errormessage(tr("Couldn't get default configuration from ndigo board. Break!"));
             return 1;
         }
 
-        conf[PCI_ID].adc_mode = NDIGO_ADC_MODE_ABCD; // 1.25Gs/s, 4 channels
+        conf[i].adc_mode = NDIGO_ADC_MODE_ABCD; // 1.25Gs/s, 4 channels
 
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_A0].threshold = (short)(initpars.card[PCI_ID].chan[0].thresh * 131);
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_A0].edge = initpars.card[PCI_ID].chan[0].edge;
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_A0].rising = initpars.card[PCI_ID].chan[0].rising;
+        conf[i].trigger[NDIGO_TRIGGER_A0].threshold = (short)(initpars.card[i].chan[0].thresh * 131);
+        conf[i].trigger[NDIGO_TRIGGER_A0].edge = initpars.card[i].chan[0].edge;
+        conf[i].trigger[NDIGO_TRIGGER_A0].rising = initpars.card[i].chan[0].rising;
 
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_B0].threshold = (short)(initpars.card[PCI_ID].chan[1].thresh * 131);
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_B0].edge = initpars.card[PCI_ID].chan[1].edge;
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_B0].rising = initpars.card[PCI_ID].chan[1].rising;
+        conf[i].trigger[NDIGO_TRIGGER_B0].threshold = (short)(initpars.card[i].chan[1].thresh * 131);
+        conf[i].trigger[NDIGO_TRIGGER_B0].edge = initpars.card[i].chan[1].edge;
+        conf[i].trigger[NDIGO_TRIGGER_B0].rising = initpars.card[i].chan[1].rising;
 
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_C0].threshold = (short)(initpars.card[PCI_ID].chan[2].thresh * 131);
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_C0].edge = initpars.card[PCI_ID].chan[2].edge;
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_C0].rising = initpars.card[PCI_ID].chan[2].rising;
+        conf[i].trigger[NDIGO_TRIGGER_C0].threshold = (short)(initpars.card[i].chan[2].thresh * 131);
+        conf[i].trigger[NDIGO_TRIGGER_C0].edge = initpars.card[i].chan[2].edge;
+        conf[i].trigger[NDIGO_TRIGGER_C0].rising = initpars.card[i].chan[2].rising;
 
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_D0].threshold = (short)(initpars.card[PCI_ID].chan[3].thresh * 131);
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_D0].edge = initpars.card[PCI_ID].chan[3].edge;
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_D0].rising = initpars.card[PCI_ID].chan[3].rising;
+        conf[i].trigger[NDIGO_TRIGGER_D0].threshold = (short)(initpars.card[i].chan[3].thresh * 131);
+        conf[i].trigger[NDIGO_TRIGGER_D0].edge = initpars.card[i].chan[3].edge;
+        conf[i].trigger[NDIGO_TRIGGER_D0].rising = initpars.card[i].chan[3].rising;
 
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_TDC].edge = initpars.card[PCI_ID].chan[4].edge; // edge trigger
-        conf[PCI_ID].trigger[NDIGO_TRIGGER_TDC].rising = initpars.card[PCI_ID].chan[4].rising; // rising edge
+        conf[i].trigger[NDIGO_TRIGGER_TDC].edge = initpars.card[i].chan[4].edge; // edge trigger
+        conf[i].trigger[NDIGO_TRIGGER_TDC].rising = initpars.card[i].chan[4].rising; // rising edge
 
 
         if (i == 0) {
             //die folgende Zeilen wurden von Till Jahnke empfohlen (MW)
-            conf[PCI_ID].drive_bus[0] = NDIGO_TRIGGER_SOURCE_A0; //puts ion MCP signal on BUS0 such that all cards have access to it (MW)
-            conf[PCI_ID].drive_bus[1] = NDIGO_TRIGGER_SOURCE_C0; //puts electron MCP signal on BUS1 such that all cards have access to it (MW)
-            conf[PCI_ID].drive_bus[2] = NDIGO_TRIGGER_SOURCE_TDC; //puts projectile pulse signal on BUS2 such that all cards have access to it (MW)
+            conf[i].drive_bus[0] = NDIGO_TRIGGER_SOURCE_A0; //puts ion MCP signal on BUS0 such that all cards have access to it (MW)
+            conf[i].drive_bus[1] = NDIGO_TRIGGER_SOURCE_B0; //puts electron MCP signal on BUS1 such that all cards have access to it (MW)
+            conf[i].drive_bus[2] = NDIGO_TRIGGER_SOURCE_TDC; //puts projectile pulse signal on BUS2 such that all cards have access to it (MW)
         }
-        conf[PCI_ID].trigger_block[0].gates = NDIGO_TRIGGER_GATE_NONE; // hardware gate
-        conf[PCI_ID].trigger_block[1].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
-        conf[PCI_ID].trigger_block[2].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
-        conf[PCI_ID].trigger_block[3].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
+        conf[i].trigger_block[0].gates = NDIGO_TRIGGER_GATE_NONE; // hardware gate
+        conf[i].trigger_block[1].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
+        conf[i].trigger_block[2].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
+        conf[i].trigger_block[3].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
 
-        conf[PCI_ID].trigger_block[0].sources = NDIGO_TRIGGER_SOURCE_A0; // trigger source is channel A
-        conf[PCI_ID].trigger_block[1].sources = NDIGO_TRIGGER_SOURCE_B0; // trigger source is channel A
-        conf[PCI_ID].trigger_block[2].sources = NDIGO_TRIGGER_SOURCE_C0; // trigger source is channel A
-        conf[PCI_ID].trigger_block[3].sources = NDIGO_TRIGGER_SOURCE_D0; // trigger source is channel A
+        conf[i].trigger_block[0].sources = NDIGO_TRIGGER_SOURCE_A0; // trigger source is channel A
+        conf[i].trigger_block[1].sources = NDIGO_TRIGGER_SOURCE_B0; // trigger source is channel A
+        conf[i].trigger_block[2].sources = NDIGO_TRIGGER_SOURCE_C0; // trigger source is channel A
+        conf[i].trigger_block[3].sources = NDIGO_TRIGGER_SOURCE_D0; // trigger source is channel A
 
         for (int k = 0; k < 4; k++) {
 
-            //		conf[PCI_ID].trigger_block[k].sources = pow((float) 2, 2*k); // trigger source is channel A
-            //		conf[PCI_ID].trigger_block[k].gates = NDIGO_TRIGGER_GATE_0;
-            conf[PCI_ID].trigger_block[k].precursor = initpars.card[PCI_ID].cardPars.precursor; // precursor in in steps of 3.2ns.
-            conf[PCI_ID].trigger_block[k].length = initpars.card[PCI_ID].cardPars.length; // amount of samples to record after the trigger in 3.2ns steps
-            conf[PCI_ID].trigger_block[k].retrigger = initpars.card[PCI_ID].cardPars.retrigger;
-            conf[PCI_ID].trigger_block[k].enabled = true; // enable trigger
-            conf[PCI_ID].trigger_block[k].minimum_free_packets = 1.0; //
+            //		conf[i].trigger_block[k].sources = pow((float) 2, 2*k); // trigger source is channel A
+            //		conf[i].trigger_block[k].gates = NDIGO_TRIGGER_GATE_0;
+            conf[i].trigger_block[k].precursor = initpars.card[i].cardPars.precursor; // precursor in in steps of 3.2ns.
+            conf[i].trigger_block[k].length = initpars.card[i].cardPars.length; // amount of samples to record after the trigger in 3.2ns steps
+            conf[i].trigger_block[k].retrigger = initpars.card[i].cardPars.retrigger;
+            conf[i].trigger_block[k].enabled = true; // enable trigger
+            conf[i].trigger_block[k].minimum_free_packets = 1.0; //
 
-            conf[PCI_ID].analog_offset[k] = 0; // position of the baseline. 0 is gnd. Range is ~ -0.22 bis +0.22. Correspnding to ~+-0.5V
+            conf[i].analog_offset[k] = 0; // position of the baseline. 0 is gnd. Range is ~ -0.22 bis +0.22. Correspnding to ~+-0.5V
         }
-        conf[PCI_ID].dc_offset[0] = 0.4;
-        conf[PCI_ID].tdc_enabled = true; // TDC
+        conf[i].dc_offset[0] = 0.4;
+        conf[i].tdc_enabled = true; // TDC
     }
+
+
+
+    //Ndigos configure zero suppression etc. for 250M cards
+    for (int i = ndigoCount; i < ndigoCount + ndigo250mCount && i < NR_CARDS; i++) {
+        int ii = i-ndigoCount;
+
+        int status = ndigo250m_get_default_configuration(ndigos[i], &conf250m[ii]);
+        if(status)
+        {
+            emit errormessage(tr("Couldn't get default configuration from ndigo board. Break!"));
+            return 1;
+        }
+        for (int j = 0; j < 6; j++) conf250m[ii].analog_offset[j]=0;
+
+        conf250m[ii].trigger[NDIGO_TRIGGER_A0].edge = initpars.card[i].chan[0].edge;
+        conf250m[ii].trigger[NDIGO_TRIGGER_A0].rising = initpars.card[i].chan[0].rising;;
+        conf250m[ii].trigger[NDIGO_TRIGGER_A0].threshold = (short)(initpars.card[i].chan[0].thresh * 262);
+
+        conf250m[ii].trigger[NDIGO_TRIGGER_B0].edge = initpars.card[i].chan[1].edge;
+        conf250m[ii].trigger[NDIGO_TRIGGER_B0].rising = initpars.card[i].chan[1].rising;;
+        conf250m[ii].trigger[NDIGO_TRIGGER_B0].threshold = (short)(initpars.card[i].chan[1].thresh * 262);
+
+        conf250m[ii].trigger[NDIGO_TRIGGER_C0].edge = initpars.card[i].chan[2].edge;
+        conf250m[ii].trigger[NDIGO_TRIGGER_C0].rising = initpars.card[i].chan[2].rising;;
+        conf250m[ii].trigger[NDIGO_TRIGGER_C0].threshold = (short)(initpars.card[i].chan[2].thresh * 262);
+
+        conf250m[ii].trigger[NDIGO_TRIGGER_D0].edge = initpars.card[i].chan[3].edge;
+        conf250m[ii].trigger[NDIGO_TRIGGER_D0].rising = initpars.card[i].chan[3].rising;
+        conf250m[ii].trigger[NDIGO_TRIGGER_D0].threshold = (short)(initpars.card[i].chan[3].thresh * 262);
+
+        conf250m[ii].trigger[NDIGO_TRIGGER_TDC].edge = initpars.card[i].chan[4].edge; // edge trigger
+        conf250m[ii].trigger[NDIGO_TRIGGER_TDC].rising = initpars.card[i].chan[4].rising; // rising edge
+
+
+        conf250m[ii].trigger_block[0].gates = NDIGO_TRIGGER_GATE_NONE; // hardware gate
+        conf250m[ii].trigger_block[1].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
+        conf250m[ii].trigger_block[2].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
+        conf250m[ii].trigger_block[3].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
+
+        conf250m[ii].trigger_block[0].sources = NDIGO_TRIGGER_SOURCE_B0;
+        conf250m[ii].trigger_block[1].sources = NDIGO_TRIGGER_SOURCE_B0;
+        conf250m[ii].trigger_block[2].sources = NDIGO_TRIGGER_SOURCE_BUS0;
+        conf250m[ii].trigger_block[3].sources = NDIGO_TRIGGER_SOURCE_D0;
+
+
+        for (int k = 0; k < 4; k++) {
+            conf250m[ii].trigger_block[k].precursor = initpars.card[i].cardPars.precursor; // precursor in in steps of 4ns.
+            conf250m[ii].trigger_block[k].length = initpars.card[i].cardPars.length; // amount of samples to record after the trigger in 4ns steps
+            conf250m[ii].trigger_block[k].retrigger = initpars.card[i].cardPars.retrigger;
+            conf250m[ii].trigger_block[k].enabled = true; // enable trigger
+            conf250m[ii].trigger_block[k].minimum_free_packets = 1.0; //
+        }
+    }
+
 
     if (initpars.main.advconf) ReadAdvConfig();
 
+
+    //Submit configuration
     for (int i = 0; i < ndigoCount; i++) {
-        int PCI_ID = PCI_ID_of_card[i];
-        ndigo_configure(ndigos[i], &conf[PCI_ID]); // write configuration to board
+        if(ndigo_configure(ndigos[i], &conf[i]) != NDIGO_OK) {// write configuration to board
+            logmsg = tr("5G board configuration failed. Abort! ");
+            emit errormessage(logmsg);
+            return 1;
+        }
+             // write configuration to board
+    }
+
+    for (int i = ndigoCount; i < ndigoCount + ndigo250mCount && i < NR_CARDS; i++) {
+        int ii = i-ndigoCount;
+        if(ndigo250m_configure(ndigos[i], &conf250m[ii]) != NDIGO_OK) {// write configuration to board
+            logmsg = tr("250M board configuration failed. Abort! ");
+            emit errormessage(logmsg);
+            return 1;
+        }
     }
 
 

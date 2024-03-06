@@ -80,8 +80,8 @@ private:
     init_pars initpars;
     status_pars statuspars;
 
-    qint32 PCI_ID_of_card[NR_CARDS];
-    qint32 cardNO_of_PCI_ID[NR_CARDS];
+ //   qint32 PCI_ID_of_card[NR_CARDS];
+ //   qint32 cardNO_of_PCI_ID[NR_CARDS];
 
 
 
@@ -93,7 +93,7 @@ private:
 
 
     ndigo_configuration conf[NR_CARDS - NR_250MCARDS];
-    ndigo250m_configuration conf250m;
+    ndigo250m_configuration conf250m[NR_250MCARDS];
 
 
 
