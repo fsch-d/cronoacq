@@ -20,6 +20,7 @@ acqcontrol::acqcontrol(QObject *parent)
     : QObject{parent}
 {
     m_isrunning=false;
+    m_isinitialized=false;
     m_count=0;
     m_nofsamples=0;
     m_timercreated_flag=false;
@@ -47,6 +48,10 @@ acqcontrol::acqcontrol(QObject *parent)
 acqcontrol::~acqcontrol()
 {
     qInfo() << this << "acqcontrol destructor ...";
+
+    for (int m = 0; m < ndigoCount + ndigo250mCount; m++) ndigo_close(ndigos[m]);
+
+
 
 
     emit finished();
@@ -76,14 +81,19 @@ void acqcontrol::createtimers()
 
 void acqcontrol::acqloop()
 {
+    QString strError;
+    int trigcardNo = initpars.main.sourcecard;
+
+
     m_isrunning=true;
     if(!m_timercreated_flag) createtimers();
 
-    if(initAcq()!=0) m_isrunning=false;
+    if(initAcq()!=0){
+        m_isrunning=false;
+        emit errormessage(tr("Unable to initialize cards!"));
+    }
 
 
-    QString strError;
-    int trigcardNo = initpars.main.sourcecard;
 
 
     //relative timing is sensitive to the order
@@ -128,7 +138,7 @@ void acqcontrol::acqloop()
 
 
         ndigo250m_read_in in250m;
-        in250m.acknowledge_last_read = 0;
+        in250m.acknowledge_last_read = true;
         in250m.mask = 0;
         ndigo250m_read_out out250m;
 
@@ -176,42 +186,59 @@ void acqcontrol::acqloop()
 
         int readoutErr250m = -1;
 
+        //////////////////////////////////////////
+        /// \brief loop all cards
+        //////////////////////////////////////////
         for(int i=-1; i<ndigoCount + ndigo250mCount * NDIGO250M_DMA_COUNT; i++) //do the actual work
         {
             volatile ndigo_packet* packet;
             int c = -1; int dma = 0;
-            if(i==-1 && readoutErr == 0) packet = out.first_packet; // read trigger card first
-            else if (i==trigcardNo || i==-1) continue;
+
+
+
+            //////////////////////////////////////////
+            /// \brief figure out, which packet to read
+            //////////////////////////////////////////
+            if(i==-1){
+                if(readoutErr == 0) packet = out.first_packet; // read trigger card first
+                else packet = NULL;
+            }
+            else if (i==trigcardNo) packet = NULL;
             else if (i < ndigoCount){
                 if (ndigo_read(ndigos[i], &in, &out) == 0)  // read the remainig 5G cards
                 {
                     packet = out.first_packet;
                     b_nodata=false;
                 }
-                else continue;
+                else packet = NULL;
             }
-            else if (i >= ndigoCount){// read 250M card
+            else{// read 250M card
                 c = qFloor((double)(i-ndigoCount)/(double)NDIGO250M_DMA_COUNT) + ndigoCount; // 250M card number
                 dma = i - ndigoCount - (c - ndigoCount) * NDIGO250M_DMA_COUNT; // DMA channel
-                if( dma == 0 ) readoutErr250m = ndigo250m_read(ndigos[c], &in250m, &out250m);
                 //qInfo() << "Attempt to read 250M card. readoutErr = " << readoutErr250m;
-                if(dma < NDIGO250M_DMA_COUNT && dma >= 0 && readoutErr250m == 0){
-                    packet = out250m.first_packet[dma];
-                    if (out250m.error_code[dma] != NDIGO_READ_OK || !packet) continue;
-                    //qInfo() << "Data in 250M card. Timestamp: " << packet->timestamp << ", channel: " << packet->channel;
+                if(dma < NDIGO250M_DMA_COUNT && dma >= 0){
+                    if( dma == 0 ) readoutErr250m = ndigo250m_read(ndigos[c], &in250m, &out250m);
+                    if(readoutErr250m == 0){
+                        if (out250m.error_code[dma] != NDIGO_READ_OK) packet = NULL;
+                        else{
+                            packet = out250m.first_packet[dma];
+                            b_nodata=false;
+                        }
+                    }
+                    else packet = NULL;
                 }
-                if (out250m.error_code[dma] != NDIGO_READ_OK){
-                    qInfo() << "readoutErr = " << readoutErr250m << ", error code =" << out250m.error_code[dma];
-                    continue;
-                }
+                else packet = NULL;
             }
-            else continue;
 
-            int n= (i==-1) ? trigcardNo : (( i < ndigoCount ) ? i : c);
+            int n= (i==-1) ? trigcardNo : (( i < ndigoCount ) ? i : c); //this is the actual index of the card presently read out (only ised for ndigo_process_tdc_packet)
 
-            if(!event.validTrigger && !m_sampleNow) //if nothing is to do here, start over
+
+            if((!event.validTrigger && !m_sampleNow) || (packet==NULL)) //if nothing is to do here, start over
                 continue;
 
+            //////////////////////////////////////////
+            /// \brief loop through packet
+            //////////////////////////////////////////
             while (packet <= (c == -1 ? out.last_packet : out250m.end[dma]))
             {
                 if (packet->type == NDIGO_PACKET_TYPE_16_BIT_SIGNED || packet->type == NDIGO_PACKET_TYPE_TDC_DATA) //ADC or TDC channel
@@ -232,8 +259,14 @@ void acqcontrol::acqloop()
                         short* data2 = (short*)packet->data;
                         for (unsigned int j = 0; j < 100 && j < packet->length * 4; j++)
                         {
-                            x.append(10+j*0.8);
-                            y.append(*data2 * 0.00762939453);
+                            if(n<ndigoCount){
+                                x.append(10+j*0.8);
+                                y.append(*data2 * 0.00762939453);
+                            }
+                            else{
+                                x.append((10+j*0.8)*4);
+                                y.append(*data2 * 0.00762939453 * 2);
+                            }
                             data2++;
                         }
                         emit sampleready(x,y);
@@ -321,10 +354,7 @@ void acqcontrol::acqloop()
 
 
 
-    for (int m = 0; m < ndigoCount + ndigo250mCount; m++) {
-        ndigo_stop_capture(ndigos[m]);
-        ndigo_close(ndigos[m]);
-    }
+    for (int m = 0; m < ndigoCount + ndigo250mCount; m++) ndigo_stop_capture(ndigos[m]);
 
     if(m_restart){
         emit startloop();
@@ -398,6 +428,7 @@ void acqcontrol::RateTrigger()
 
 int acqcontrol::initCards()
 {
+    ndigo_init_parameters init_params[NR_CARDS];
     int error_code;
     const char *error_message;
     QString logmsg;
@@ -405,47 +436,57 @@ int acqcontrol::initCards()
     //Set up initialization struct with board 0 as master
     //Find out how many Ndigo5G boards are present
     ndigoCount = ndigo_count_devices(&error_code, &error_message);
-
     if (error_message != QString("OK")) {
-        emit errormessage(tr("Initialization error!!!"));
+        emit errormessage(tr("Initialization error on 5G cards!!!"));
         return 1;
     }
-
     logmsg = tr("ndigo_count_devices returns: %1").arg(error_message) + " ... ";
     logmsg = logmsg + tr("the number of 5G boards is: %1").arg(ndigoCount);
-
     emit logmessage(logmsg);
+
 
     //Find out how many Ndigo250M  boards are present
     ndigo250mCount = ndigo250m_count_devices(&error_code, &error_message);
-
     if (error_message != QString("OK")) {
-        emit errormessage(tr("Initialization error!!!"));
+        emit errormessage(tr("Initialization error on 250M cards!!!"));
         return 1;
     }
-
     logmsg = tr("ndigo250m_count_devices returns: %1").arg(error_message) + " ... ";
     logmsg = logmsg + tr("the number of 250M boards is: %1").arg(ndigo250mCount);
-
     emit logmessage(logmsg);
 
 
-
-    //Who is the master?
-
-    for (int i = 0; i < ndigoCount && i < NR_CARDS; i++) {// get static info of each board
+    ////////////////////////////////////////////
+    /// \brief initialize 5G cards
+    ////////////////////////////////////////////
+    ndigo_device* ndigo_temp[NR_CARDS - NR_250MCARDS];
+    for (int i = 0; i < ndigoCount && i < NR_CARDS - NR_250MCARDS; i++) {
         ndigo_get_default_init_parameters(&init_params[i]);
         init_params[i].card_index = i;
-        ndigo_device* ndigo_temp = ndigo_init(&init_params[i], &error_code, &error_message);
+        init_params[i].version = NDIGO_API_VERSION;
+        init_params[i].hptdc_sync_enabled = 0;
+        init_params[i].board_id = i;
+        init_params[i].drive_external_clock = (i == 0);
+        init_params[i].use_external_clock = (i != 0);
+        init_params[i].is_slave = (i != 0);// ((initpars.main.sourcecard < ndigoCount) ? initpars.main.sourcecard : 0));
+        init_params[i].sync_period = 4;
+        init_params[i].multiboard_sync = 1;
+        init_params[i].buffer_size[0] = BUFFER_SIZE_5G;
+
+        ndigo_temp[i] = ndigo_init(&init_params[i], &error_code, &error_message);
+        qInfo() << error_code << error_message;
+
         if (error_code)
         {
             logmsg = tr("Error %1 during ADC (5G) - init: %2 ...").arg(error_code).arg(error_message);
             emit errormessage(logmsg);
+
             return 1;
         }
-        ndigo_get_static_info(ndigo_temp, &ndigo_info[i]);
-        ndigo_close(ndigo_temp);
+        ndigo_get_static_info(ndigo_temp[i], &ndigo_info[i]);
     }
+
+    //sort 5G cards according to their board serials
     for (int i = 0; i < ndigoCount  && i < NR_CARDS; i++)
     {
         int serial = ndigo_info[i].board_serial;
@@ -457,39 +498,14 @@ int acqcontrol::initCards()
 
         }
         qInfo() << "ndigo serial: " << serial << ", Device ID: " << device_id;
-        init_params[device_id].card_index = i;
+        ndigo_set_board_id(ndigo_temp[i], device_id);
+        ndigos[device_id] = ndigo_temp[i];
     }
 
 
-    //set all init_params for 5G boards
-    for (int i = 0; i < ndigoCount && i < NR_CARDS; i++) {
-        init_params[i].version = NDIGO_API_VERSION;
-        init_params[i].hptdc_sync_enabled = 0;
-        init_params[i].board_id = i;
-        init_params[i].drive_external_clock = (i == 0);
-        init_params[i].use_external_clock = (i != 0);
-        init_params[i].is_slave = (i != 0);// ((initpars.main.sourcecard < ndigoCount) ? initpars.main.sourcecard : 0));
-        init_params[i].sync_period = 4;
-        init_params[i].multiboard_sync = 1;
-        init_params[i].buffer_size[0] = BUFFER_SIZE_5G;
-    }
-
-    // Initialize all Ndigo5G boards
-    for (int i = 0; i < ndigoCount && i < NR_CARDS; i++) {
-        ndigos[i] = ndigo_init(&init_params[i], &error_code, &error_message);
-        qInfo() << error_code << error_message;
-    }
-    if (error_code)
-    {
-        logmsg = tr("Error %1 during ADC (5G) - init: %2 ...").arg(error_code).arg(error_message);
-        emit errormessage(logmsg);
-
-        return 1;
-    }
-
-
-
-    // initialize 250M cards
+    ////////////////////////////////////////////
+    /// \brief initialize 250M card(s)
+    ////////////////////////////////////////////
     for (int i = ndigoCount; i < (ndigoCount + ndigo250mCount) && i < NR_CARDS; i++) {
         ndigo250m_get_default_init_parameters(&init_params[i]);
         init_params[i].card_index = 0;
@@ -498,55 +514,46 @@ int acqcontrol::initCards()
         init_params[i].board_id = i;
         init_params[i].drive_external_clock = 0;
         init_params[i].use_external_clock = 1;
-        init_params[i].is_slave = 1;// ((initpars.main.sourcecard < ndigoCount) ? initpars.main.sourcecard : 0));
+        init_params[i].is_slave = 1;
         init_params[i].sync_period = 4;
         init_params[i].multiboard_sync = 1;
-    }
-
-    // Initialize all Ndigo250 boards
-    for (int i = ndigoCount; i < (ndigoCount + ndigo250mCount) && i < NR_CARDS; i++) {
         ndigos[i] = ndigo250m_init(&init_params[i], &error_code, &error_message);
-        qInfo() << error_code << error_message;
-    }
-    if (error_code)
-    {
-        logmsg = tr("Error %1 during ADC (250M) - init: %2 ...").arg(error_code).arg(error_message);
-        emit errormessage(logmsg);
+        qInfo() << "250M board initialized: " << error_code << error_message;
+        if (error_code)
+        {
+            logmsg = tr("Error %1 during ADC (250M) - init: %2 ...").arg(error_code).arg(error_message);
+            emit errormessage(logmsg);
 
-        return 1;
+            return 1;
+        }
     }
 
     ///////////////////////////////////////////////////////////////////////////////
     // read general info from the ADC-card (serial number, firmware version, ...):
-    for (int i = 0; i < ndigoCount; i++) ndigo_get_static_info(ndigos[i], &ndigo_info[i]);
+    for (int i = 0; i < ndigoCount + ndigo250mCount; i++){
+        ndigo_get_static_info(ndigos[i], &ndigo_info[i]);
+        qInfo() << "serial: " << ndigo_info[i].board_serial << ", board id:" << ndigo_info[i].board_id;
+    }
 
     ///////////////////////////////////////////////////////////////////////////////
+
+
+    m_isinitialized=true;
 
     return 0;
 }
 
+
 int acqcontrol::initAcq()
 {
     QString logmsg;
-    int error_code=0;
-    const char *error_message;
 
 
-    for (int i = 0; i < ndigoCount + ndigo250mCount; i++) {
-        if (i < ndigoCount) ndigos[i] = ndigo_init(&init_params[i], &error_code, &error_message); //init 5G cards
-        else ndigos[i] = ndigo250m_init(&init_params[i], &error_code, &error_message); //init 250M cards
-        qInfo() << error_code << error_message << i;
-    }
-    if (error_code)
-    {
-        logmsg = tr("Error %1 during ADC - init: %2 ...").arg(error_code).arg(error_message);
-        emit errormessage(logmsg);
+    if(!m_isinitialized) return 1;
 
-        return 1;
-    }
-
-
-    //Ndigos configure zero suppression etc. 5G
+    ////////////////////////////////////////////////////
+    /// \brief configure 5G cards (zero supression etc.)
+    ////////////////////////////////////////////////////
     for (int i = 0; i < ndigoCount; i++) {
         int status = ndigo_get_default_configuration(ndigos[i], &conf[i]);
         if(status)
@@ -611,7 +618,9 @@ int acqcontrol::initAcq()
 
 
 
-    //Ndigos configure zero suppression etc. for 250M cards
+    ////////////////////////////////////////////////////////
+    /// \brief configure 250M card(s) (zero supression etc.)
+    ////////////////////////////////////////////////////////
     for (int i = ndigoCount; i < ndigoCount + ndigo250mCount && i < NR_CARDS; i++) {
         int ii = i-ndigoCount;
 
@@ -650,8 +659,8 @@ int acqcontrol::initAcq()
 
         conf250m[ii].trigger_block[0].sources = NDIGO_TRIGGER_SOURCE_B0;
         conf250m[ii].trigger_block[1].sources = NDIGO_TRIGGER_SOURCE_B0;
-        conf250m[ii].trigger_block[2].sources = NDIGO_TRIGGER_SOURCE_BUS0;
-        conf250m[ii].trigger_block[3].sources = NDIGO_TRIGGER_SOURCE_D0;
+        conf250m[ii].trigger_block[2].sources = NDIGO_TRIGGER_SOURCE_B0;
+        conf250m[ii].trigger_block[3].sources = NDIGO_TRIGGER_SOURCE_B0;
 
 
         for (int k = 0; k < 4; k++) {
@@ -674,7 +683,7 @@ int acqcontrol::initAcq()
             emit errormessage(logmsg);
             return 1;
         }
-             // write configuration to board
+        else qInfo() << "Configuration submitted to board " << i;
     }
 
     for (int i = ndigoCount; i < ndigoCount + ndigo250mCount && i < NR_CARDS; i++) {
@@ -684,6 +693,7 @@ int acqcontrol::initAcq()
             emit errormessage(logmsg);
             return 1;
         }
+        else qInfo() << "Configuration submitted to board " << i;
     }
 
 
@@ -806,6 +816,21 @@ void acqcontrol::ReadAdvConfig()
         line.replace(QLatin1String("NDIGO_TRIGGER_BUS2_PE"), QLatin1String("20"));
         line.replace(QLatin1String("NDIGO_TRIGGER_BUS3_PE"), QLatin1String("21"));
 
+
+        line.replace(QLatin1String("NDIGO250M_MAX_PRECURSOR"), QLatin1String("27"));
+        line.replace(QLatin1String("NDIGO250M_MAX_MULTISHOT"), QLatin1String("65535"));
+        line.replace(QLatin1String("NDIGO250M_FIFO_DEPTH"), QLatin1String("4094"));
+        line.replace(QLatin1String("NDIGO250M_CHANNEL_A_MASK"), QLatin1String("1"));
+        line.replace(QLatin1String("NDIGO250M_CHANNEL_B_MASK"), QLatin1String("2"));
+        line.replace(QLatin1String("NDIGO250M_CHANNEL_C_MASK"), QLatin1String("4"));
+        line.replace(QLatin1String("NDIGO250M_CHANNEL_D_MASK"), QLatin1String("8"));
+        line.replace(QLatin1String("NDIGO250M_CHANNEL_T_MASK"), QLatin1String("16"));
+        line.replace(QLatin1String("NDIGO250M_CHANNEL_COUNT"), QLatin1String("4"));
+        line.replace(QLatin1String("NDIGO250M_TDC_COUNT"), QLatin1String("1"));
+        line.replace(QLatin1String("NDIGO250M_DMA_COUNT"), QLatin1String("6"));
+        line.replace(QLatin1String("NDIGO250M_GATE_COUNT"), QLatin1String("4"));
+
+
         line.replace(QLatin1String("true"), QLatin1String("1"),Qt::CaseInsensitive);
         line.replace(QLatin1String("false"), QLatin1String("0"),Qt::CaseInsensitive);
 
@@ -840,318 +865,617 @@ void acqcontrol::ReadAdvConfig()
         //split LHS into different components
         QStringList varList = lhs.split(u'.');
 
-        if(nindex==0 || !(varList.at(0).compare(QString("conf[%1]").arg(index[0]),Qt::CaseInsensitive)==0) || index[0]<0 || index[0]>=NR_CARDS)
+        /////////////////////////////////////////////////////////////////
+        /// \brief read 5G configuration entries "... conf[i].... = value"
+        /////////////////////////////////////////////////////////////////
+        if(nindex>0 && (varList.at(0).compare(QString("conf[%1]").arg(index[0]),Qt::CaseInsensitive)==0) && index[0]>=0 && index[0]<ndigoCount)
         {
-            emit errormessage(QLatin1String("Couldn't interpret %1").arg(line));
-            continue;
+            if(varList.size()==2)
+            {
+                if (varList.at(1).compare(QLatin1String("size"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok && value>=0)
+                    {
+                        conf[index[0]].size = value;
+                        emit logmessage(QString("conf[%1].size = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("version"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf[index[0]].version = value;
+                        emit logmessage(QString("conf[%1].version = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("adc_mode"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf[index[0]].adc_mode = value;
+                        emit logmessage(QString("conf[%1].adc_mode = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("bandwidth"),Qt::CaseInsensitive)==0) {
+                    double value = rhs.toDouble(&ok);
+                    if(ok)
+                    {
+                        conf[index[0]].bandwidth = value;
+                        emit logmessage(QString("conf[%1].bandwidth = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("tdc_enabled"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf[index[0]].tdc_enabled = (value == 0 ? false : true);
+                        emit logmessage(QString("conf[%1].tdc_enabled = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("tdc_fb_enabled"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf[index[0]].tdc_fb_enabled = (value == 0 ? false : true);
+                        emit logmessage(QString("conf[%1].tdc_fb_enabled = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("auto_trigger_period"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf[index[0]].auto_trigger_period = value;
+                        emit logmessage(QString("conf[%1].auto_trigger_period = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("auto_trigger_random_exponent"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf[index[0]].auto_trigger_random_exponent = value;
+                        emit logmessage(QString("conf[%1].auto_trigger_random_exponent = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("output_mode"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf[index[0]].output_mode = value;
+                        emit logmessage(QString("conf[%1].output_mode = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if(nindex==2)
+                {
+                    if (varList.at(1).compare(QString("analog_offset[%1]").arg(index[1]),Qt::CaseInsensitive)==0) {
+                        double value = rhs.toDouble(&ok);
+                        if (index[1] >= 0 && index[1] < NDIGO_CHANNEL_COUNT && ok) {
+                            conf[index[0]].analog_offset[index[1]] = value;
+                            emit logmessage(QString("conf[%1].analog_offset[%2] = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    else if (varList.at(1).compare(QString("dc_offset[%1]").arg(index[1]),Qt::CaseInsensitive)==0) {
+                        double value = rhs.toDouble(&ok);
+                        if (index[1] >= 0 && index[1] < 2 && ok) {
+                            conf[index[0]].dc_offset[index[1]] = value;
+                            emit logmessage(QString("conf[%1].dc_offset[%2] = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    else if (varList.at(1).compare(QString("drive_bus[%1]").arg(index[1]),Qt::CaseInsensitive)==0) {
+                        int value = rhs.toInt(&ok,0);
+                        if (index[1] >= 0 && index[1] < 4 && ok) {
+                            conf[index[0]].drive_bus[index[1]] = value;
+                            emit logmessage(QString("conf[%1].drive_bus[%2] = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                }
+            }
+            else if(varList.size()==3 && nindex==2)
+            {
+                if (varList.at(1).compare(QString("trigger[%1]").arg(index[1]),Qt::CaseInsensitive) == 0 && index[1] >= 0 && index[1] < NDIGO_TRIGGER_COUNT + NDIGO_ADD_TRIGGER_COUNT)
+                {
+                    if (varList.at(2).compare(QString("threshold"), Qt::CaseInsensitive) == 0) {
+                        int value = rhs.toInt(&ok,0)*131;
+                        if (value >= -32768 && value <= 32768 && ok) {
+                            conf[index[0]].trigger[index[1]].threshold = (short)value;
+                            emit logmessage(QString("conf[%1].trigger[%2].threshold = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("edge"), Qt::CaseInsensitive) == 0) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].trigger[index[1]].edge = (value == 0 ? false : true);
+                            emit logmessage(QString("conf[%1].trigger[%2].edge = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("rising"), Qt::CaseInsensitive) == 0) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].trigger[index[1]].rising = (value == 0 ? false : true);
+                            emit logmessage(QString("conf[%1].trigger[%2].rising = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                }
+                else if (varList.at(1).compare(QString("trigger_block[%1]").arg(index[1]),Qt::CaseInsensitive) == 0  && index[1] >= 0 && index[1] < NDIGO_CHANNEL_COUNT + 1)
+                {
+                    if (varList.at(2).compare(QString("enabled"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].trigger_block[index[1]].enabled = (value == 0 ? false : true);
+                            emit logmessage(QString("conf[%1].trigger_block[%2].enabled = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("force_led"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].trigger_block[index[1]].force_led = (value == 0 ? false : true);
+                            emit logmessage(QString("conf[%1].trigger_block[%2].force_led = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("retrigger"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].trigger_block[index[1]].retrigger = (value == 0 ? false : true);
+                            emit logmessage(QString("conf[%1].trigger_block[%2].retrigger = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("multi_shot_count"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].trigger_block[index[1]].multi_shot_count = value;
+                            emit logmessage(QString("conf[%1].trigger_block[%2].multi_shot_count = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("precursor"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].trigger_block[index[1]].precursor = value;
+                            emit logmessage(QString("conf[%1].trigger_block[%2].precursor = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("length"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].trigger_block[index[1]].length = value;
+                            emit logmessage(QString("conf[%1].trigger_block[%2].length = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("sources"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].trigger_block[index[1]].sources = value;
+                            emit logmessage(QString("conf[%1].trigger_block[%2].sources = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("gates"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].trigger_block[index[1]].gates = value;
+                            emit logmessage(QString("conf[%1].trigger_block[%2].gates = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("minimum_free_packets"),Qt::CaseInsensitive) ==  0 ) {
+                        double value = rhs.toDouble(&ok);
+                        if(ok)
+                        {
+                            conf[index[0]].trigger_block[index[1]].minimum_free_packets = value;
+                            emit logmessage(QString("conf[%1].trigger_block[%2].minimum_free_packets = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                }
+                else if (varList.at(1).compare(QString("gating_block[%1]").arg(index[1]),Qt::CaseInsensitive) == 0 && index[1] >= 0 && index[1] < NDIGO_GATE_COUNT)
+                {
+                    if (varList.at(2).compare(QString("negate"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].gating_block[index[1]].negate = (value == 0 ? false : true);
+                            emit logmessage(QString("conf[%1].gating_block[%2].negate = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("retrigger"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].gating_block[index[1]].retrigger = (value == 0 ? false : true);
+                            emit logmessage(QString("conf[%1].gating_block[%2].retrigger = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("extend"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].gating_block[index[1]].extend = (value == 0 ? false : true);
+                            emit logmessage(QString("conf[%1].gating_block[%2].extend = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("start"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].gating_block[index[1]].start = value;
+                            emit logmessage(QString("conf[%1].gating_block[%2].start = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("stop"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].gating_block[index[1]].stop = value;
+                            emit logmessage(QString("conf[%1].gating_block[%2].stop = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("sources"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].gating_block[index[1]].sources = value;
+                            emit logmessage(QString("conf[%1].gating_block[%2].sources = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                }
+                else if (varList.at(1).compare(QString("extension_block[%1]").arg(index[1]),Qt::CaseInsensitive) == 0 && index[1] >= 0 && index[1] < NDIGO_EXTENSION_COUNT)
+                {
+                    if (varList.at(2).compare(QString("enable"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].extension_block[index[1]].enable = (value == 0 ? false : true);
+                            emit logmessage(QString("conf[%1].extension_block[%2].enable = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("ignore_cable"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf[index[0]].extension_block[index[1]].ignore_cable = (value == 0 ? false : true);
+                            emit logmessage(QString("conf[%1].extension_block[%2].ignore_cable = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                }
+            }
         }
 
-        if(varList.size()==2)
+
+        /////////////////////////////////////////////////////////////////
+        /// \brief read 250M configuration entries "... conf250m[i].... = value"
+        /////////////////////////////////////////////////////////////////
+        if(nindex>0 && (varList.at(0).compare(QString("conf250m[%1]").arg(index[0]),Qt::CaseInsensitive)==0) && index[0]>=0 && index[0]<ndigo250mCount)
         {
-            if (varList.at(1).compare(QLatin1String("size"),Qt::CaseInsensitive)==0) {
-                int value = rhs.toInt(&ok,0);
-                if(ok && value>=0)
-                {
-                    conf[index[0]].size = value;
-                    emit logmessage(QString("conf[%1].size = %2").arg(index[0]).arg(value));
-                    continue;
-                }
-            }
-            else if (varList.at(1).compare(QLatin1String("version"),Qt::CaseInsensitive)==0) {
-                int value = rhs.toInt(&ok,0);
-                if(ok)
-                {
-                    conf[index[0]].version = value;
-                    emit logmessage(QString("conf[%1].version = %2").arg(index[0]).arg(value));
-                    continue;
-                }
-            }
-            else if (varList.at(1).compare(QLatin1String("adc_mode"),Qt::CaseInsensitive)==0) {
-                int value = rhs.toInt(&ok,0);
-                if(ok)
-                {
-                    conf[index[0]].adc_mode = value;
-                    emit logmessage(QString("conf[%1].adc_mode = %2").arg(index[0]).arg(value));
-                    continue;
-                }
-            }
-            else if (varList.at(1).compare(QLatin1String("bandwidth"),Qt::CaseInsensitive)==0) {
-                double value = rhs.toDouble(&ok);
-                if(ok)
-                {
-                    conf[index[0]].bandwidth = value;
-                    emit logmessage(QString("conf[%1].bandwidth = %2").arg(index[0]).arg(value));
-                    continue;
-                }
-            }
-            else if (varList.at(1).compare(QLatin1String("tdc_enabled"),Qt::CaseInsensitive)==0) {
-                int value = rhs.toInt(&ok,0);
-                if(ok)
-                {
-                    conf[index[0]].tdc_enabled = (value == 0 ? false : true);
-                    emit logmessage(QString("conf[%1].tdc_enabled = %2").arg(index[0]).arg(value));
-                    continue;
-                }
-            }
-            else if (varList.at(1).compare(QLatin1String("tdc_fb_enabled"),Qt::CaseInsensitive)==0) {
-                int value = rhs.toInt(&ok,0);
-                if(ok)
-                {
-                    conf[index[0]].tdc_fb_enabled = (value == 0 ? false : true);
-                    emit logmessage(QString("conf[%1].tdc_fb_enabled = %2").arg(index[0]).arg(value));
-                    continue;
-                }
-            }
-            else if (varList.at(1).compare(QLatin1String("auto_trigger_period"),Qt::CaseInsensitive)==0) {
-                int value = rhs.toInt(&ok,0);
-                if(ok)
-                {
-                    conf[index[0]].auto_trigger_period = value;
-                    emit logmessage(QString("conf[%1].auto_trigger_period = %2").arg(index[0]).arg(value));
-                    continue;
-                }
-            }
-            else if (varList.at(1).compare(QLatin1String("auto_trigger_random_exponent"),Qt::CaseInsensitive)==0) {
-                int value = rhs.toInt(&ok,0);
-                if(ok)
-                {
-                    conf[index[0]].auto_trigger_random_exponent = value;
-                    emit logmessage(QString("conf[%1].auto_trigger_random_exponent = %2").arg(index[0]).arg(value));
-                    continue;
-                }
-            }
-            else if (varList.at(1).compare(QLatin1String("output_mode"),Qt::CaseInsensitive)==0) {
-                int value = rhs.toInt(&ok,0);
-                if(ok)
-                {
-                    conf[index[0]].output_mode = value;
-                    emit logmessage(QString("conf[%1].output_mode = %2").arg(index[0]).arg(value));
-                    continue;
-                }
-            }
-            else if(nindex==2)
+            if(varList.size()==2)
             {
-                if (varList.at(1).compare(QString("analog_offset[%1]").arg(index[1]),Qt::CaseInsensitive)==0) {
-                    double value = rhs.toDouble(&ok);
-                    if (index[1] >= 0 && index[1] < NDIGO_CHANNEL_COUNT && ok) {
-                        conf[index[0]].analog_offset[index[1]] = value;
-                        emit logmessage(QString("conf[%1].analog_offset[%2] = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                else if (varList.at(1).compare(QString("dc_offset[%1]").arg(index[1]),Qt::CaseInsensitive)==0) {
-                    double value = rhs.toDouble(&ok);
-                    if (index[1] >= 0 && index[1] < 2 && ok) {
-                        conf[index[0]].dc_offset[index[1]] = value;
-                        emit logmessage(QString("conf[%1].dc_offset[%2] = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                else if (varList.at(1).compare(QString("drive_bus[%1]").arg(index[1]),Qt::CaseInsensitive)==0) {
+                if (varList.at(1).compare(QLatin1String("size"),Qt::CaseInsensitive)==0) {
                     int value = rhs.toInt(&ok,0);
-                    if (index[1] >= 0 && index[1] < 4 && ok) {
-                        conf[index[0]].drive_bus[index[1]] = value;
-                        emit logmessage(QString("conf[%1].drive_bus[%2] = %3").arg(index[0]).arg(index[1]).arg(value));
+                    if(ok && value>=0)
+                    {
+                        conf250m[index[0]].size = value;
+                        emit logmessage(QString("conf250m[%1].size = %2").arg(index[0]).arg(value));
                         continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("version"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf250m[index[0]].version = value;
+                        emit logmessage(QString("conf250m[%1].version = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("tdc_enabled"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf250m[index[0]].tdc_enabled = (value == 0 ? false : true);
+                        emit logmessage(QString("conf250m[%1].tdc_enabled = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("tdc_fb_enabled"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf250m[index[0]].tdc_fb_enabled = (value == 0 ? false : true);
+                        emit logmessage(QString("conf250m[%1].tdc_fb_enabled = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("auto_trigger_period"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf250m[index[0]].auto_trigger_period = value;
+                        emit logmessage(QString("conf250m[%1].auto_trigger_period = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("auto_trigger_random_exponent"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok)
+                    {
+                        conf250m[index[0]].auto_trigger_random_exponent = value;
+                        emit logmessage(QString("conf250m[%1].auto_trigger_random_exponent = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("divisor"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(ok && value > 1 && value < 33)
+                    {
+                        conf250m[index[0]].divisor = value;
+                        emit logmessage(QString("conf250m[%1].divisor = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if (varList.at(1).compare(QLatin1String("decimation"),Qt::CaseInsensitive)==0) {
+                    int value = rhs.toInt(&ok,0);
+                    if(value > 0 && value < 256 && ok)
+                    {
+                        conf250m[index[0]].decimation = value;
+                        emit logmessage(QString("conf250m[%1].decimation = %2").arg(index[0]).arg(value));
+                        continue;
+                    }
+                }
+                else if(nindex==2)
+                {
+                    if (varList.at(1).compare(QString("analog_offset[%1]").arg(index[1]),Qt::CaseInsensitive)==0) {
+                        double value = rhs.toDouble(&ok);
+                        if (index[1] >= 0 && index[1] < 6 && ok) {
+                            conf250m[index[0]].analog_offset[index[1]] = value;
+                            emit logmessage(QString("conf250m[%1].analog_offset[%2] = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    else if (varList.at(1).compare(QString("high_gain[%1]").arg(index[1]),Qt::CaseInsensitive)==0) {
+                        double value = rhs.toDouble(&ok);
+                        if (index[1] >= 0 && index[1] < 2 && value < 2 && value >=0 && ok) {
+                            conf250m[index[0]].high_gain[index[1]] = value;
+                            emit logmessage(QString("conf250m[%1].high_gain[%2] = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    else if (varList.at(1).compare(QString("fine_gain[%1]").arg(index[1]),Qt::CaseInsensitive)==0) {
+                        double value = rhs.toDouble(&ok);
+                        if (index[1] >= 0 && index[1] < 2 && value < 13 && value >=0  && ok) {
+                            conf250m[index[0]].fine_gain[index[1]] = value;
+                            emit logmessage(QString("conf250m[%1].fine_gain[%2] = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    else if (varList.at(1).compare(QString("gain_correction[%1]").arg(index[1]),Qt::CaseInsensitive)==0) {
+                        double value = rhs.toDouble(&ok);
+                        if (index[1] >= 0 && index[1] < 2 && value < 11 && value >=0  && ok) {
+                            conf250m[index[0]].gain_correction[index[1]] = value;
+                            emit logmessage(QString("conf250m[%1].gain_correction[%2] = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    else if (varList.at(1).compare(QString("drive_bus[%1]").arg(index[1]),Qt::CaseInsensitive)==0) {
+                        int value = rhs.toInt(&ok,0);
+                        if (index[1] >= 0 && index[1] < 4 && ok) {
+                            conf250m[index[0]].drive_bus[index[1]] = value;
+                            emit logmessage(QString("conf250m[%1].drive_bus[%2] = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                }
+            }
+            else if(varList.size()==3 && nindex==2)
+            {
+                if (varList.at(1).compare(QString("trigger[%1]").arg(index[1]),Qt::CaseInsensitive) == 0 && index[1] >= 0 && index[1] < NDIGO_TRIGGER_COUNT)
+                {
+                    if (varList.at(2).compare(QString("threshold"), Qt::CaseInsensitive) == 0) {
+                        int value = rhs.toInt(&ok,0)*131;
+                        if (value >= -32768 && value <= 32768 && ok) {
+                            conf250m[index[0]].trigger[index[1]].threshold = (short)value;
+                            emit logmessage(QString("conf250m[%1].trigger[%2].threshold = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("edge"), Qt::CaseInsensitive) == 0) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].trigger[index[1]].edge = (value == 0 ? false : true);
+                            emit logmessage(QString("conf250m[%1].trigger[%2].edge = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("rising"), Qt::CaseInsensitive) == 0) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].trigger[index[1]].rising = (value == 0 ? false : true);
+                            emit logmessage(QString("conf250m[%1].trigger[%2].rising = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                }
+                else if (varList.at(1).compare(QString("trigger_block[%1]").arg(index[1]),Qt::CaseInsensitive) == 0  && index[1] >= 0 && index[1] < NDIGO250M_CHANNEL_COUNT + 1)
+                {
+                    if (varList.at(2).compare(QString("enabled"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].trigger_block[index[1]].enabled = (value == 0 ? false : true);
+                            emit logmessage(QString("conf250m[%1].trigger_block[%2].enabled = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("force_led"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].trigger_block[index[1]].force_led = (value == 0 ? false : true);
+                            emit logmessage(QString("conf250m[%1].trigger_block[%2].force_led = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("retrigger"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].trigger_block[index[1]].retrigger = (value == 0 ? false : true);
+                            emit logmessage(QString("conf250m[%1].trigger_block[%2].retrigger = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("multi_shot_count"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].trigger_block[index[1]].multi_shot_count = value;
+                            emit logmessage(QString("conf250m[%1].trigger_block[%2].multi_shot_count = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("precursor"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].trigger_block[index[1]].precursor = value;
+                            emit logmessage(QString("conf250m[%1].trigger_block[%2].precursor = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("length"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].trigger_block[index[1]].length = value;
+                            emit logmessage(QString("conf250m[%1].trigger_block[%2].length = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("sources"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].trigger_block[index[1]].sources = value;
+                            emit logmessage(QString("conf250m[%1].trigger_block[%2].sources = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("gates"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].trigger_block[index[1]].gates = value;
+                            emit logmessage(QString("conf250m[%1].trigger_block[%2].gates = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("minimum_free_packets"),Qt::CaseInsensitive) ==  0 ) {
+                        double value = rhs.toDouble(&ok);
+                        if(ok)
+                        {
+                            conf250m[index[0]].trigger_block[index[1]].minimum_free_packets = value;
+                            emit logmessage(QString("conf250m[%1].trigger_block[%2].minimum_free_packets = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                }
+                else if (varList.at(1).compare(QString("gating_block[%1]").arg(index[1]),Qt::CaseInsensitive) == 0 && index[1] >= 0 && index[1] < NDIGO250M_GATE_COUNT)
+                {
+                    if (varList.at(2).compare(QString("negate"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].gating_block[index[1]].negate = (value == 0 ? false : true);
+                            emit logmessage(QString("conf250m[%1].gating_block[%2].negate = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("retrigger"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].gating_block[index[1]].retrigger = (value == 0 ? false : true);
+                            emit logmessage(QString("conf250m[%1].gating_block[%2].retrigger = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("extend"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].gating_block[index[1]].extend = (value == 0 ? false : true);
+                            emit logmessage(QString("conf250m[%1].gating_block[%2].extend = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("start"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].gating_block[index[1]].start = value;
+                            emit logmessage(QString("conf250m[%1].gating_block[%2].start = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("stop"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].gating_block[index[1]].stop = value;
+                            emit logmessage(QString("conf250m[%1].gating_block[%2].stop = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
+                    }
+                    if (varList.at(2).compare(QString("sources"),Qt::CaseInsensitive) ==  0 ) {
+                        int value = rhs.toInt(&ok,0);
+                        if(ok)
+                        {
+                            conf250m[index[0]].gating_block[index[1]].sources = value;
+                            emit logmessage(QString("conf250m[%1].gating_block[%2].sources = %3").arg(index[0]).arg(index[1]).arg(value));
+                            continue;
+                        }
                     }
                 }
             }
         }
-        else if(varList.size()==3 && nindex==2)
-        {
-            if (varList.at(1).compare(QString("trigger[%1]").arg(index[1]),Qt::CaseInsensitive) == 0 && index[1] >= 0 && index[1] < NDIGO_TRIGGER_COUNT + NDIGO_ADD_TRIGGER_COUNT)
-            {
-                if (varList.at(2).compare(QString("threshold"), Qt::CaseInsensitive) == 0) {
-                    int value = rhs.toInt(&ok,0)*131;
-                    if (value >= -32768 && value <= 32768 && ok) {
-                        conf[index[0]].trigger[index[1]].threshold = (short)value;
-                        emit logmessage(QString("conf[%1].trigger[%2].threshold = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("edge"), Qt::CaseInsensitive) == 0) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].trigger[index[1]].edge = (value == 0 ? false : true);
-                        emit logmessage(QString("conf[%1].trigger[%2].edge = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("rising"), Qt::CaseInsensitive) == 0) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].trigger[index[1]].rising = (value == 0 ? false : true);
-                        emit logmessage(QString("conf[%1].trigger[%2].rising = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-            }
-            else if (varList.at(1).compare(QString("trigger_block[%1]").arg(index[1]),Qt::CaseInsensitive) == 0  && index[1] >= 0 && index[1] < NDIGO_CHANNEL_COUNT + 1)
-            {
-                if (varList.at(2).compare(QString("enabled"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].trigger_block[index[1]].enabled = (value == 0 ? false : true);
-                        emit logmessage(QString("conf[%1].trigger_block[%2].enabled = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("force_led"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].trigger_block[index[1]].force_led = (value == 0 ? false : true);
-                        emit logmessage(QString("conf[%1].trigger_block[%2].force_led = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("retrigger"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].trigger_block[index[1]].retrigger = (value == 0 ? false : true);
-                        emit logmessage(QString("conf[%1].trigger_block[%2].retrigger = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("multi_shot_count"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].trigger_block[index[1]].multi_shot_count = value;
-                        emit logmessage(QString("conf[%1].trigger_block[%2].multi_shot_count = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("precursor"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].trigger_block[index[1]].precursor = value;
-                        emit logmessage(QString("conf[%1].trigger_block[%2].precursor = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("length"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].trigger_block[index[1]].length = value;
-                        emit logmessage(QString("conf[%1].trigger_block[%2].length = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("sources"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].trigger_block[index[1]].sources = value;
-                        emit logmessage(QString("conf[%1].trigger_block[%2].sources = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("gates"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].trigger_block[index[1]].gates = value;
-                        emit logmessage(QString("conf[%1].trigger_block[%2].gates = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("minimum_free_packets"),Qt::CaseInsensitive) ==  0 ) {
-                    double value = rhs.toDouble(&ok);
-                    if(ok)
-                    {
-                        conf[index[0]].trigger_block[index[1]].minimum_free_packets = value;
-                        emit logmessage(QString("conf[%1].trigger_block[%2].minimum_free_packets = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-            }
-            else if (varList.at(1).compare(QString("gating_block[%1]").arg(index[1]),Qt::CaseInsensitive) == 0 && index[1] >= 0 && index[1] < NDIGO_GATE_COUNT)
-            {
-                if (varList.at(2).compare(QString("negate"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].gating_block[index[1]].negate = (value == 0 ? false : true);
-                        emit logmessage(QString("conf[%1].gating_block[%2].negate = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("retrigger"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].gating_block[index[1]].retrigger = (value == 0 ? false : true);
-                        emit logmessage(QString("conf[%1].gating_block[%2].retrigger = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("extend"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].gating_block[index[1]].extend = (value == 0 ? false : true);
-                        emit logmessage(QString("conf[%1].gating_block[%2].extend = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("start"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].gating_block[index[1]].start = value;
-                        emit logmessage(QString("conf[%1].gating_block[%2].start = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("stop"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].gating_block[index[1]].stop = value;
-                        emit logmessage(QString("conf[%1].gating_block[%2].stop = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("sources"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].gating_block[index[1]].sources = value;
-                        emit logmessage(QString("conf[%1].gating_block[%2].sources = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-            }
-            else if (varList.at(1).compare(QString("extension_block[%1]").arg(index[1]),Qt::CaseInsensitive) == 0 && index[1] >= 0 && index[1] < NDIGO_EXTENSION_COUNT)
-            {
-                if (varList.at(2).compare(QString("enable"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].extension_block[index[1]].enable = (value == 0 ? false : true);
-                        emit logmessage(QString("conf[%1].extension_block[%2].enable = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-                if (varList.at(2).compare(QString("ignore_cable"),Qt::CaseInsensitive) ==  0 ) {
-                    int value = rhs.toInt(&ok,0);
-                    if(ok)
-                    {
-                        conf[index[0]].extension_block[index[1]].ignore_cable = (value == 0 ? false : true);
-                        emit logmessage(QString("conf[%1].extension_block[%2].ignore_cable = %3").arg(index[0]).arg(index[1]).arg(value));
-                        continue;
-                    }
-                }
-            }
-        }
-        emit errormessage(QLatin1String("Couldn't interpret %1").arg(line));
+        else emit errormessage(QLatin1String("Couldn't interpret %1").arg(line));
     }
 
     inputFile.close();

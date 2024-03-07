@@ -66,7 +66,6 @@ private slots:
 
     void on_actionrecord_data_triggered();
 
-
     void on_maintrigger_stateChanged(int arg1);
 
 private:

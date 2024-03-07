@@ -20,5 +20,7 @@
         <file>icons/conffile.svg</file>
         <file>icons/fit_reg.svg</file>
         <file>icons/record_reg.svg</file>
+        <file>icons/disconnect.svg</file>
+        <file>icons/connect.svg</file>
     </qresource>
 </RCC>

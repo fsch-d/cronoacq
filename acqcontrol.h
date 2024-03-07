@@ -68,6 +68,7 @@ private:
     bool m_sampleNow;
     bool m_timercreated_flag;
     bool m_writetofile;
+    bool m_isinitialized;
     int m_count;
     int m_nofsamples;
 
@@ -80,13 +81,7 @@ private:
     init_pars initpars;
     status_pars statuspars;
 
- //   qint32 PCI_ID_of_card[NR_CARDS];
- //   qint32 cardNO_of_PCI_ID[NR_CARDS];
 
-
-
-    //crono_device devices[4];
-    ndigo_init_parameters init_params[NR_CARDS];
     ndigo_device* ndigos[NR_CARDS];
     ndigo_static_info ndigo_info[NR_CARDS];
     ndigo_param_info ndigo_paramInfo[NR_CARDS];

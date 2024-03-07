@@ -9,7 +9,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1113</width>
+    <width>1371</width>
     <height>837</height>
    </rect>
   </property>
@@ -139,20 +139,6 @@
     </layout>
    </widget>
   </widget>
-  <widget class="QToolBar" name="toolBar">
-   <property name="windowTitle">
-    <string>toolBar</string>
-   </property>
-   <attribute name="toolBarArea">
-    <enum>TopToolBarArea</enum>
-   </attribute>
-   <attribute name="toolBarBreak">
-    <bool>false</bool>
-   </attribute>
-   <addaction name="actionstart_acquistion"/>
-   <addaction name="actionrestart_acquisition"/>
-   <addaction name="actionstop_acquisition"/>
-  </widget>
   <widget class="QToolBar" name="toolBar_2">
    <property name="windowTitle">
     <string>toolBar_2</string>
@@ -163,9 +149,9 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
-   <addaction name="actionstart_sampling"/>
-   <addaction name="actionsingle_sampling"/>
-   <addaction name="actionpause_sampling"/>
+   <addaction name="actionstart_acquistion"/>
+   <addaction name="actionrestart_acquisition"/>
+   <addaction name="actionstop_acquisition"/>
   </widget>
   <widget class="QDockWidget" name="TracedockWidget">
    <property name="sizePolicy">
@@ -286,8 +272,9 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
-   <addaction name="actionrecord_data"/>
-   <addaction name="actionstop_recording"/>
+   <addaction name="actionstart_sampling"/>
+   <addaction name="actionsingle_sampling"/>
+   <addaction name="actionpause_sampling"/>
   </widget>
   <widget class="QToolBar" name="toolBar_4">
    <property name="windowTitle">
@@ -299,14 +286,15 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
-   <addaction name="actionadv_configuration"/>
+   <addaction name="actionrecord_data"/>
+   <addaction name="actionstop_recording"/>
   </widget>
   <widget class="QMenuBar" name="menuBar">
    <property name="geometry">
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1113</width>
+     <width>1371</width>
      <height>22</height>
     </rect>
    </property>
@@ -328,6 +316,18 @@
     <addaction name="actionadv_configuration"/>
    </widget>
    <addaction name="menuDAQ"/>
+  </widget>
+  <widget class="QToolBar" name="toolBar_5">
+   <property name="windowTitle">
+    <string>toolBar_5</string>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionadv_configuration"/>
   </widget>
   <action name="actionstart_acquistion">
    <property name="icon">
@@ -411,6 +411,31 @@
    </property>
    <property name="text">
     <string>stop recording</string>
+   </property>
+  </action>
+  <action name="actionConnect_cards">
+   <property name="icon">
+    <iconset>
+     <normalon>:/icons/connect.svg</normalon>
+    </iconset>
+   </property>
+   <property name="text">
+    <string>connect cards</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::NoRole</enum>
+   </property>
+  </action>
+  <action name="actiondisconnect_cards">
+   <property name="icon">
+    <iconset resource="cronoacq_ressources.qrc">
+     <normaloff>:/icons/disconnect.svg</normaloff>:/icons/disconnect.svg</iconset>
+   </property>
+   <property name="text">
+    <string>disconnect cards</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::NoRole</enum>
    </property>
   </action>
   <zorder>propertydockWidget</zorder>

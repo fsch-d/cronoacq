@@ -31,13 +31,6 @@ HEADERS += \
     acqcontrol.h \
     cronoacqdlg.h \
     cronotypes.h \
-    driver/include/Ndigo250M_interface.h \
-    driver/include/NdigoAverager_interface.h \
-    driver/include/Ndigo_common_interface.h \
-    driver/include/Ndigo_interface.h \
-    driver/include/crono_interface.h \
-    driver/include/crono_tools.h \
-    driver/include/tdcmanager.h \
     go4server.h \
     go4socket.h \
     qcustomplot.h \

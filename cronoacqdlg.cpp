@@ -37,6 +37,7 @@ cronoacqDlg::cronoacqDlg(QWidget *parent)
     setCentralWidget(ui->TracedockWidget);
     ui->actionpause_sampling->setEnabled(false);
     ui->actionrestart_acquisition->setEnabled(false);
+    ui->actionstart_acquistion->setEnabled(true);
     ui->actionstop_acquisition->setEnabled(false);
     ui->actionstop_recording->setEnabled(false);
     ui->lcdRate->setAutoFillBackground(true);
@@ -280,6 +281,16 @@ void cronoacqDlg::on_activeTreeItemChanged(const QModelIndex &index)
         ui->customPlot->graph(1)->setData(x, y);
         ui->customPlot->graph(0)->setVisible(true);
         ui->customPlot->graph(1)->setVisible(true);
+        if(statuspars.active_card < 3)
+        {
+            ui->customPlot->xAxis->setRange(0, 100);
+            ui->customPlot->yAxis->setRange(-100, 100);
+        }
+        else
+        {
+            ui->customPlot->xAxis->setRange(0, 400);
+            ui->customPlot->yAxis->setRange(-200, 200);
+        }
     }
 
     ui->customPlot->replot();
@@ -443,7 +454,7 @@ void cronoacqDlg::initpropertygrid()
     }
     case 1:
     {
-        QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("card settings"));
+        QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("trigger block configuration"));
         QtVariantProperty *item = variantManager->addProperty(QMetaType::Int, QLatin1String("precursor"));
         item->setValue(initpars.card[statuspars.active_card].cardPars.precursor);
         topItem->addSubProperty(item);
@@ -463,7 +474,7 @@ void cronoacqDlg::initpropertygrid()
     }
     case 2:
     {
-        QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("channel settings"));
+        QtProperty *topItem = variantManager->addProperty(QtVariantPropertyManager::groupTypeId(), QLatin1String("trigger configuration"));
         QtVariantProperty *item = variantManager->addProperty(QMetaType::Bool, QLatin1String("edge"));
         item->setValue(initpars.card[statuspars.active_card].chan[statuspars.active_chan].edge);
         topItem->addSubProperty(item);
