@@ -153,6 +153,7 @@ cronoacqDlg::~cronoacqDlg()
 
     if(m_initialize_settings)
     {
+        //qInfo() << "write geometry to settings";
         settings.setValue("geometry", saveGeometry());
         settings.setValue("windowState", saveState());
     }

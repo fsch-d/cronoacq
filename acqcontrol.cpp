@@ -194,6 +194,9 @@ void acqcontrol::acqloop()
             volatile ndigo_packet* packet;
             int c = -1; int dma = 0;
 
+            int timefactor = 1; // timefactor for different sampling rates. A vaule of 1 corresponds to 1.25Gs (5G cards in ABCD mode), 4 is 250Ms (250M cards)
+            int chargefactor = 1; // ADC charge factor (1 for 5G cards, 2 for 250M cards)
+
 
 
             //////////////////////////////////////////
@@ -213,6 +216,8 @@ void acqcontrol::acqloop()
                 else packet = NULL;
             }
             else{// read 250M card
+                timefactor = 4;
+                chargefactor = 2;
                 c = qFloor((double)(i-ndigoCount)/(double)NDIGO250M_DMA_COUNT) + ndigoCount; // 250M card number
                 dma = i - ndigoCount - (c - ndigoCount) * NDIGO250M_DMA_COUNT; // DMA channel
                 //qInfo() << "Attempt to read 250M card. readoutErr = " << readoutErr250m;
@@ -259,14 +264,8 @@ void acqcontrol::acqloop()
                         short* data2 = (short*)packet->data;
                         for (unsigned int j = 0; j < 100 && j < packet->length * 4; j++)
                         {
-                            if(n<ndigoCount){
-                                x.append(10+j*0.8);
-                                y.append(*data2 * 0.00762939453);
-                            }
-                            else{
-                                x.append((10+j*0.8)*4);
-                                y.append(*data2 * 0.00762939453 * 2);
-                            }
+                            x.append((10+j*0.8)*timefactor);
+                            y.append(*data2 * 0.00762939453 * chargefactor);
                             data2++;
                         }
                         emit sampleready(x,y);
@@ -286,7 +285,7 @@ void acqcontrol::acqloop()
                         {
                             dataBffr << (qint64)(packet->card * 5 + packet->channel);
                             short* data2 = (short*)&packet->data;
-                            dataBffr << (qint64)(packet->timestamp +time_CF(data2, packet->length * 4));
+                            dataBffr << (qint64)(packet->timestamp + time_CF(data2, packet->length * 4) * timefactor);
                             nof_signals++;
                         }
                         else
@@ -497,7 +496,7 @@ int acqcontrol::initCards()
             if (serial < ndigo_info[k].board_serial) device_id++;
 
         }
-        qInfo() << "ndigo serial: " << serial << ", Device ID: " << device_id;
+        //qInfo() << "ndigo serial: " << serial << ", Device ID: " << device_id;
         ndigo_set_board_id(ndigo_temp[i], device_id);
         ndigos[device_id] = ndigo_temp[i];
     }
@@ -583,13 +582,13 @@ int acqcontrol::initAcq()
         conf[i].trigger[NDIGO_TRIGGER_TDC].edge = initpars.card[i].chan[4].edge; // edge trigger
         conf[i].trigger[NDIGO_TRIGGER_TDC].rising = initpars.card[i].chan[4].rising; // rising edge
 
-
+/*
         if (i == 0) {
             //die folgende Zeilen wurden von Till Jahnke empfohlen (MW)
             conf[i].drive_bus[0] = NDIGO_TRIGGER_SOURCE_A0; //puts ion MCP signal on BUS0 such that all cards have access to it (MW)
             conf[i].drive_bus[1] = NDIGO_TRIGGER_SOURCE_B0; //puts electron MCP signal on BUS1 such that all cards have access to it (MW)
             conf[i].drive_bus[2] = NDIGO_TRIGGER_SOURCE_TDC; //puts projectile pulse signal on BUS2 such that all cards have access to it (MW)
-        }
+        }*/
         conf[i].trigger_block[0].gates = NDIGO_TRIGGER_GATE_NONE; // hardware gate
         conf[i].trigger_block[1].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
         conf[i].trigger_block[2].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
@@ -657,10 +656,10 @@ int acqcontrol::initAcq()
         conf250m[ii].trigger_block[2].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
         conf250m[ii].trigger_block[3].gates = NDIGO_TRIGGER_GATE_NONE; // no hardware gate
 
-        conf250m[ii].trigger_block[0].sources = NDIGO_TRIGGER_SOURCE_B0;
+        conf250m[ii].trigger_block[0].sources = NDIGO_TRIGGER_SOURCE_A0;
         conf250m[ii].trigger_block[1].sources = NDIGO_TRIGGER_SOURCE_B0;
-        conf250m[ii].trigger_block[2].sources = NDIGO_TRIGGER_SOURCE_B0;
-        conf250m[ii].trigger_block[3].sources = NDIGO_TRIGGER_SOURCE_B0;
+        conf250m[ii].trigger_block[2].sources = NDIGO_TRIGGER_SOURCE_C0;
+        conf250m[ii].trigger_block[3].sources = NDIGO_TRIGGER_SOURCE_D0;
 
 
         for (int k = 0; k < 4; k++) {
@@ -847,7 +846,7 @@ void acqcontrol::ReadAdvConfig()
         QString rhs = equ.at(1).trimmed();
 
         //extract indices on LHS
-        static QRegularExpression re("\\d+");
+        static QRegularExpression re("\\d+"); // find all numbers in string
         QRegularExpressionMatchIterator i = re.globalMatch(lhs);
         int nindex=0, index[10]={0};
         while (i.hasNext() && nindex<10) {
@@ -858,8 +857,9 @@ void acqcontrol::ReadAdvConfig()
                 emit errormessage(QLatin1String("Couldn't interpret %1").arg(line));
                 continue;
             }
-            nindex++;
+            if(index[nindex]!=250) nindex++; // the "250" in "conf250m" is not an index
         }
+
 
 
         //split LHS into different components
@@ -1181,6 +1181,7 @@ void acqcontrol::ReadAdvConfig()
         /////////////////////////////////////////////////////////////////
         /// \brief read 250M configuration entries "... conf250m[i].... = value"
         /////////////////////////////////////////////////////////////////
+        varList.at(0).compare(QString("conf250m[%1]").arg(index[0]),Qt::CaseInsensitive);
         if(nindex>0 && (varList.at(0).compare(QString("conf250m[%1]").arg(index[0]),Qt::CaseInsensitive)==0) && index[0]>=0 && index[0]<ndigo250mCount)
         {
             if(varList.size()==2)
